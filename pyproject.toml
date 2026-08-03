@@ -1,0 +1,55 @@
+[project]
+name = "nexo"
+version = "0.1.0"
+description = "Intelligent LLM-powered Discord Assistant Bot for KSM AIoT"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "aiohttp>=3.14.1",
+    "discord-py>=2.7.1",
+    "fastmcp>=3.4.2",
+    "openai>=2.44.0",
+    "pydantic>=2.13.4",
+    "python-dotenv>=1.2.2",
+    "requests>=2.34.2",
+]
+
+[dependency-groups]
+dev = [
+    "python-semantic-release>=10.5.3",
+    "ruff>=0.14.10",
+]
+
+[tool.semantic_release]
+version_toml = ["pyproject.toml:project.version"]
+commit_parser = "conventional"
+upload_to_release = true
+upload_to_pypi = false  
+changelog_file = "CHANGELOG.md"
+tag_format = "{version}"
+build_command = """
+    uv lock --upgrade-package "$PACKAGE_NAME"
+    git add uv.lock
+"""
+commit_message = "chore(release): bump to {version}"
+
+[tool.semantic_release.branches.main]
+match = "main"
+
+[tool.semantic_release.commit_parser_options]
+allowed_tags = ["build", "chore", "ci", "docs", "feat", "fix", "perf", "style", "refactor", "test"]
+minor_re = "(?i)^(feat)"
+patch_re = "(?i)^(fix|perf|refactor)"
+
+[tool.semantic_release.changelog]
+exclude_commit_patterns = [
+    '''chore(?:\([^)]*?\))?: .+''',
+    '''ci(?:\([^)]*?\))?: .+''',
+    '''refactor(?:\([^)]*?\))?: .+''',
+    '''style(?:\([^)]*?\))?: .+''',
+    '''test(?:\([^)]*?\))?: .+''',
+    '''build\((?!deps\): .+)''',
+    '''Initial [Cc]ommit.*'''
+]
+
+

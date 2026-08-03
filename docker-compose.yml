@@ -1,0 +1,18 @@
+services:
+  nexo-bot:
+    build: 
+      context: .
+      dockerfile: Dockerfile
+    container_name: nexo_bot
+    restart: always
+    env_file:
+      - .env
+    
+    volumes:
+      - ./.agents:/app/.agents
+      - ./prompts:/app/prompts
+    
+    deploy:
+      resources:
+        limits:
+          memory: 300M 
