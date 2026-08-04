@@ -5,7 +5,7 @@ from datetime import datetime
 import traceback
 import aiohttp
 from mcp import ClientSession
-from mcp.client.streamable_http import streamable_http_client
+from mcp.client.sse import sse_client
 from openai import AsyncOpenAI
 
 logger = logging.getLogger("mcp_client")
@@ -34,7 +34,7 @@ ai_client = AsyncOpenAI(base_url=LLAMA_BASE_URL, api_key="sk-no-key")
 async def get_tools_from_mcp_server() -> list:
     # Try a couple of likely endpoints so this client is resilient to
     # whether the streamable MCP app is mounted at `/` or `/mcp`.
-    candidates = [MCP_SERVER_URL.rstrip("/") + "/mcp"]
+    candidates = [MCP_SERVER_URL.rstrip("/") + "/sse"]
 
     def _get_field(obj, key):
         if obj is None:
@@ -46,7 +46,7 @@ async def get_tools_from_mcp_server() -> list:
     last_exc = None
     for url in candidates:
         try:
-            async with streamable_http_client(url) as (read_stream, write_stream, _):
+            async with sse_client(url) as (read_stream, write_stream):
                 async with ClientSession(read_stream, write_stream) as session:
                     await session.initialize()
                     tools_response = await session.list_tools()
@@ -106,10 +106,10 @@ async def execute_mcp_tool(tool_name: str, arguments: dict) -> str:
     """
     Execute an MCP tool by calling the actual MCP server.
     """
-    candidates = [MCP_SERVER_URL.rstrip("/") + "/mcp"]
+    candidates = [MCP_SERVER_URL.rstrip("/") + "/sse"]
     for url in candidates:
         try:
-            async with streamable_http_client(url) as (read_stream, write_stream, _):
+            async with sse_client(url) as (read_stream, write_stream):
                 async with ClientSession(read_stream, write_stream) as session:
                     await session.initialize()
                     result = await session.call_tool(tool_name, arguments)
