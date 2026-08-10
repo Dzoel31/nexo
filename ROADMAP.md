@@ -23,10 +23,10 @@ Berikut adalah perbandingan fungsionalitas bot saat ini dengan rencana arsitektu
 
 Berdasarkan pertimbangan perangkat keras (4 Core CPU, sisa RAM 5 GB), pengembangan dibagi menjadi 3 fase:
 
-### 🟢 Fase 1: Inti (Core Bot & MCP Integration) - *Hampir Rampung*
-- Integrasi `llama-server` (Gemma) dengan antarmuka Discord.
-- MCP Integration untuk membaca skema sensor hidroponik secara langsung (*Direct Injection*).
-- Pydantic Validation (Dasar).
+### 🟢 Fase 1: Inti (Core Bot & MCP Integration) - *Rampung*
+- [x] Integrasi `llama-server` (Gemma) dengan antarmuka Discord.
+- [x] MCP Integration untuk membaca skema sensor hidroponik secara langsung (*Direct Injection*).
+- [x] Pydantic Validation (Dasar).
 
 ### 🟡 Fase 2: Gateway, WebHooks & Auto-Deploy (Pigeon Style) - *Persiapan*
 - **FastAPI WebHook Gateway:** Menerima *payload* dari GitHub dengan perlindungan otentikasi HMAC.
@@ -94,24 +94,24 @@ Berdasarkan pertimbangan perangkat keras (4 Core CPU, sisa RAM 5 GB), pengembang
 - [ ] Implementasi HMAC Webhook Signature, Deduplication, & Guardrails.
 
 **AGENT & INFERENCE**
-- [ ] Buat *Context & Date Resolver* (Pydantic).
+- [x] Buat *Context & Date Resolver* (Pydantic & Dynamic System Context).
 - [ ] Rombak *in-memory history* menjadi modul Database dengan sistem *Rolling Summaries* (merangkum percakapan usang agar hemat token).
-- [ ] Validasi *context length* maksimal 8,192 token sebelum request dikirim ke llama-server.
+- [x] Validasi *context length* maksimal 8,192 token sebelum request dikirim ke llama-server (dengan batasan karakter & rolling history limit).
 - [ ] Pembuatan knowledge base *Datasheet Perangkat IoT* dan *Modul Ajar* (chunking PDF dokumen AIoT ke dalam `pgvector`).
 - [ ] *(Low Priority)* Implementasi **Streaming Responses** (`stream=True`). **Catatan:** Berisiko tinggi memicu *Rate Limit* Discord, sehingga bukan prioritas utama saat ini.
 - [ ] Implementasi **Semantic Tool Routing (Tool Retrieval / RAG Router)**. Mencegah penuhnya *context window* dengan cara memfilter dan hanya memasukkan skema/deskripsi *tools* MCP yang relevan (menggunakan *vector search*) ke dalam *system prompt*.
 - [ ] Tambahkan **Robust Error Handling (Exponential Backoff)** menggunakan library `tenacity` saat berkomunikasi dengan LLM atau MCP.
 
 **TOOL EXECUTOR & DB (CORE)**
-- [ ] Integrasi Pydantic untuk validasi skema input/output *tool*.
+- [x] Integrasi Pydantic untuk validasi skema input/output *tool* (`DiscordEventSchema`, `CheckVoiceChannelSchema`, dll).
 - [ ] Tambah *Audit Logging* (catat *user ID* dan *tool* yang dipakai).
 - [ ] Setup koneksi PostgreSQL *async* & buat tabel utama (`mcp_tools`, `knowledge_base`, `thread_conversations`, `webhook_mappings`, `audit_logs`, `member_points`, `lab_inventory`).
 - [ ] Implementasi **Parallel Tool Execution** menggunakan `asyncio.gather` agar eksekusi *multiple-tools* berjalan serentak.
 - [ ] Pembuatan dasbor/sistem **Observability & Token Metrics** untuk mencatat statistik penggunaan token LLM dan frekuensi pemakaian tool per *member*.
 
 **DISCORD COGS & USER FEATURES**
-- [ ] Pembuatan Cog *Community*: Sistem Onboarding, Absensi `/hadir_vc`, dan *Gamification Leaderboard*.
-- [ ] Pembuatan Cog *Utilities*: Polling dinamis, Manajemen *Discord Threads* (pembuatan & auto-archive), dan Notulensi Pintar.
+- [x] Pembuatan Cog *Community*: Sistem Onboarding (auto-role & welcome message) dan Absensi Voice Channel (`check_voice_channel`, `$vc`, `/voice`).
+- [x] Pembuatan Cog *Utilities*: Polling dinamis (`create_discord_poll`), Manajemen *Discord Threads* (pembuatan & auto-archive), dan Perintah Reset Konteks Memori (`$reset`, `/reset`).
 - [ ] Pembuatan Cog *Scheduler*: Sinkronisasi kalender dan *blast* pengingat rapat (`discord.ext.tasks`).
 - [ ] Pembuatan Cog *Lab Assistant*: *Tool* untuk query Inventaris Lab IoT dan monitoring status Sensor (*Snapshot* suhu/kelembaban).
 - [ ] (Future) Pembuatan *tool* eksekusi fisik (contoh: MQTT *publish* ke relay ESP32) berserta *role permission checker*.
@@ -120,3 +120,73 @@ Berdasarkan pertimbangan perangkat keras (4 Core CPU, sisa RAM 5 GB), pengembang
 - [ ] Rancang dan bangun **Web Dashboard GUI** untuk memanajemen konfigurasi Nexo tanpa harus menyentuh kode.
 - [ ] **Knowledge Base Manager**: Fitur UI untuk *upload*, hapus, dan kelola dokumen/materi yang akan masuk ke sistem RAG (Vektor DB).
 - [ ] **MCP Server Manager**: Fitur antarmuka untuk menambahkan, mengedit, atau menghapus berbagai *endpoint URL* MCP Server IoT secara dinamis dan menyimpannya langsung ke database.
+
+---
+
+## 6. Perhitungan & Arsitektur Batasan Rate Limit (Discord API Limits)
+
+Untuk memastikan bot berjalan stabil tanpa terkena pemblokiran IP atau pencabutan *token* dari Discord, berikut adalah batasan Discord API beserta perhitungan kuota dan strategi mitigasi arsitektur Nexo.
+
+> ⚠️ **DISCLAIMER:** Discord secara resmi menyatakan bahwa angka *per-route rate limit* **bersifat dinamis dan dapat berubah tanpa pemberitahuan**. Dokumentasi resmi Discord ([Rate Limits](https://discord.com/developers/docs/topics/rate-limits)) mewajibkan pengembang **tidak meng-*hardcode* angka ini** dan sebagai gantinya mem-*parse* header respons HTTP (`X-RateLimit-*`). Angka-angka di bawah ini diambil dari **dokumentasi resmi** (untuk Global & Invalid Request) serta **community benchmark yang konsisten** (untuk per-route) dan digunakan **hanya sebagai dasar perhitungan arsitektural**, bukan sebagai konstanta tetap.
+
+### A. Tabel Batasan Discord API
+
+**Sumber Resmi (Official — Didokumentasikan Discord):**
+
+| Komponen | Batasan Resmi | Sumber | Strategi Penanganan Nexo |
+| :--- | :--- | :--- | :--- |
+| **Global REST Rate Limit** | **50 request / detik** (seluruh endpoint REST) | [Docs: Global Rate Limit](https://discord.com/developers/docs/topics/rate-limits#global-rate-limit) | Antrean global via `asyncio.Queue` & `asyncio.Lock` |
+| **Invalid Request Limit** | **10,000 invalid request / 10 menit** (status 401, 403, 429) | [Docs: Invalid Request Limit](https://discord.com/developers/docs/topics/rate-limits#invalid-request-limit-aka-cloudflare-bans) | Validasi skema ketat menggunakan **Pydantic** |
+| **Gateway (WebSocket)** | **120 event / 60 detik** per koneksi | [Docs: Gateway](https://discord.com/developers/docs/events/gateway#rate-limiting) | Pembatasan frekuensi `change_presence` & event |
+
+**Benchmark Komunitas (Non-Guaranteed — Dapat Berubah Sewaktu-waktu):**
+
+| Komponen / Route | Benchmark Umum | Scope | Strategi Penanganan Nexo |
+| :--- | :--- | :--- | :--- |
+| **Send Message** | ~5 request / 5 detik | Per channel | Penggabungan pesan (*chunking*) max 2,000 karakter |
+| **Edit Message** | ~5 request / 5 detik | Per channel | Mengedit pesan *wait message* tunggal |
+| **Delete Message (Individual)** | ~5 request / 1 detik | Per channel | `asyncio.sleep()` antar operasi; prioritaskan Bulk Delete |
+| **Add/Remove Reaction** | ~1 request / 0.25 detik | Per channel | `asyncio.sleep()` antar operasi |
+| **Bulk Delete Messages** | ~1 request / 1 detik (max 100 pesan, umur < 14 hari) | Per channel | Filter otomatis via `channel.purge()` |
+
+### B. Model Matematis Formulasi Delay Aman ($\Delta t_{\text{safe}}$)
+
+Untuk setiap endpoint API dengan kuota maksimal $L$ request dalam jendela waktu $W$ detik, kecepatan rata-rata teoritis maksimal dan interval minimum dihitung sebagai:
+$$R_{\text{teoritis}} = \frac{L}{W} \quad (\text{request/detik}), \qquad \Delta t_{\text{min}} = \frac{W}{L} \quad (\text{detik/request})$$
+
+Untuk mengantisipasi *network jitter*, *latency spike*, dan *race condition*, Nexo menerapkan **Safety Margin Factor** ($S$) secara seragam. Formulasi delay aman ($\Delta t_{\text{safe}}$) dirumuskan sebagai:
+$$\Delta t_{\text{safe}} = \Delta t_{\text{min}} \cdot S = \left( \frac{W}{L} \right) \cdot S$$
+
+Nexo menggunakan $S = 1.25$ (buffer 25%) secara konsisten untuk semua aksi, memprioritaskan stabilitas di atas kecepatan maksimal.
+
+---
+
+### C. Perhitungan Parameter Delay per Komponen Aksi ($S = 1.25$)
+
+| # | Aksi | $L$ | $W$ (detik) | $\Delta t_{\text{min}}$ | $\Delta t_{\text{safe}}$ | Throughput Aman |
+| :---: | :--- | :---: | :---: | :---: | :---: | :---: |
+| 1 | Send Message | 5 | 5 | 1.00 s | **1.25 s** | ~0.80 msg/s |
+| 2 | Edit Message | 5 | 5 | 1.00 s | **1.25 s** | ~0.80 edit/s |
+| 3 | Delete Message (Individual) | 5 | 1 | 0.20 s | **0.25 s** | ~4.00 del/s |
+| 4 | Add/Remove Reaction | 1 | 0.25 | 0.25 s | **0.3125 s** | ~3.20 react/s |
+| 5 | Bulk Delete Messages | 1 | 1 | 1.00 s | **1.25 s** | ~0.80 batch/s |
+| 6 | Global REST (semua endpoint) | 50 | 1 | 0.02 s | **0.025 s** | ~40 req/s |
+
+**Catatan Formulasi:**
+
+1. **Total Waktu Pengiriman $K$ Buah Pesan Chunk** (dimana $K = \lceil N / 2000 \rceil$, $N$ = jumlah karakter balasan LLM):
+   $$T_{\text{total, send}} = (K - 1) \cdot \Delta t_{\text{safe, send}} = (K - 1) \cdot 1.25 \text{ detik}$$
+   *Pesan pertama tidak memerlukan delay, hanya pesan ke-2, ke-3, dst.*
+
+2. **Total Waktu Penghapusan Individual $M$ Buah Pesan:**
+   $$T_{\text{total, delete}} = M \cdot \Delta t_{\text{safe, delete}} = M \cdot 0.25 \text{ detik}$$
+   *Sebagai perbandingan: Bulk Delete menghapus 100 pesan dalam 1 request vs individual yang memerlukan $100 \cdot 0.25 = 25$ detik.*
+
+3. **Formula Backoff Dinamis saat Terjadi HTTP 429:**
+   Jika server Discord mengembalikan respons HTTP 429 dengan durasi `retry_after` ($R_{\text{after}}$ dalam detik), interval penundaan dinamis dirumuskan:
+   $$\Delta t_{\text{backoff}} = R_{\text{after}} + \text{Jitter} \quad \text{dimana } \text{Jitter} \sim \text{Uniform}(0.1, 0.5) \text{ detik}$$
+
+4. **Catatan Penting `discord.py`:** Pustaka `discord.py` yang digunakan Nexo **sudah menangani rate limit secara otomatis** (*auto-sleep* saat menerima HTTP 429 dan mem-*parse* header `X-RateLimit-*` secara internal). Formulasi di atas berfungsi sebagai **aturan arsitektural tambahan** untuk mencegah bot mengirimkan *burst* request yang tidak perlu sebelum terkena 429.
+
+
+

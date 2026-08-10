@@ -1,5 +1,6 @@
 import discord
 import logging
+from discord import app_commands
 from discord.ext import commands
 from utils.mcp_client import LLAMA_BASE_URL, MCP_SERVER_URL
 
@@ -26,7 +27,11 @@ class CoreCommands(commands.Cog):
 
         embed.add_field(
             name="💬 Slash Commands",
-            value="`/tanya [question]`\nAsk the AI directly (connected to Llama.cpp & IoT tools).",
+            value=(
+                "`/tanya [question]` : Ask the AI directly (connected to Llama.cpp & IoT tools).\n"
+                "`/reset` : Reset your AI conversation context memory.\n"
+                "`/voice [channel]` : Check active members in a voice channel directly."
+            ),
             inline=False,
         )
         embed.add_field(
@@ -40,7 +45,9 @@ class CoreCommands(commands.Cog):
                 "`$help` : Display this message\n"
                 "`$ping` : Check bot latency (delay)\n"
                 "`$status` : Check LLM and MCP server status\n"
-                "`$tools` : See the list of tools the AI can use"
+                "`$tools` : See the list of tools the AI can use\n"
+                "`$reset` : Reset your AI memory context (`$reset all` for admins)\n"
+                "`$voice` / `$vc` : Check active members in a voice channel"
             ),
             inline=False,
         )
@@ -160,8 +167,140 @@ class CoreCommands(commands.Cog):
             await ctx.send("❌ Bot does not have Manage Messages permission.")
         except discord.HTTPException as e:
             await ctx.send(f"❌ HTTP Error occurred: {e}")
-        except Exception as e:
-            await ctx.send(f"❌ An error occurred: {e}")
+
+    @commands.command(aliases=["resetcontext", "clearcontext"])
+    async def reset(self, ctx, mode: str = "user"):
+        """Resets the AI conversation history and memory context."""
+        if mode.lower() == "all":
+            if not ctx.author.guild_permissions.manage_messages:
+                return await ctx.send(
+                    "❌ You need 'Manage Messages' permission to reset all conversation context."
+                )
+            if hasattr(self.bot, "conversation_history"):
+                self.bot.conversation_history.clear()
+            msg = "Global AI conversation memory context has been cleared for all users! 🧹✨"
+        else:
+            if hasattr(self.bot, "conversation_history"):
+                self.bot.conversation_history.pop(ctx.author.id, None)
+            msg = f"AI conversation memory context cleared for <@{ctx.author.id}>! 🧹✨"
+
+        embed = discord.Embed(
+            title="🧠 Context Reset",
+            description=msg,
+            color=discord.Color.blue(),
+        )
+        await ctx.send(embed=embed)
+
+    @app_commands.command(
+        name="reset", description="Clear your AI conversation context memory"
+    )
+    async def reset_slash(self, interaction: discord.Interaction):
+        user_id = interaction.user.id
+        if hasattr(self.bot, "conversation_history"):
+            self.bot.conversation_history.pop(user_id, None)
+
+        embed = discord.Embed(
+            title="🧠 Context Reset",
+            description=f"AI conversation memory context cleared for <@{user_id}>! 🧹✨",
+            color=discord.Color.blue(),
+        )
+        await interaction.response.send_message(embed=embed)
+
+    @commands.command(name="voice", aliases=["vc", "voicechannel"])
+    async def voice_cmd(self, ctx, *, channel_name: str = None):
+        """Get list of users currently in a voice channel."""
+        target_vc = None
+
+        if channel_name and channel_name.strip():
+            c_name = channel_name.lower().strip()
+            for vc in ctx.guild.voice_channels:
+                if c_name in vc.name.lower():
+                    target_vc = vc
+                    break
+
+        if not target_vc and isinstance(
+            ctx.channel, (discord.VoiceChannel, discord.StageChannel)
+        ):
+            target_vc = ctx.channel
+
+        if not target_vc and ctx.author.voice and ctx.author.voice.channel:
+            target_vc = ctx.author.voice.channel
+
+        if not target_vc:
+            if channel_name:
+                return await ctx.send(
+                    f"❌ Voice Channel containing '{channel_name}' was not found."
+                )
+            return await ctx.send(
+                "❌ Please specify a voice channel name, join a voice channel, or run this command inside a voice channel text chat."
+            )
+
+        members = target_vc.members
+        embed = discord.Embed(
+            title=f"🔊 Voice Channel: {target_vc.name}",
+            color=discord.Color.blue(),
+        )
+
+        if not members:
+            embed.description = "ℹ️ Currently, there is no one in this Voice Channel."
+        else:
+            member_list = [f"• {m.mention} ({m.display_name})" for m in members]
+            embed.description = f"**Total Members:** {len(members)}\n\n" + "\n".join(
+                member_list
+            )
+
+        embed.set_footer(text=f"Server: {ctx.guild.name} • Nexo KSM AIoT")
+        await ctx.send(embed=embed)
+
+    @app_commands.command(
+        name="voice", description="Check current members in a voice channel"
+    )
+    @app_commands.describe(channel_name="Name of the voice channel to check (optional)")
+    async def voice_slash(
+        self, interaction: discord.Interaction, channel_name: str = None
+    ):
+        target_vc = None
+
+        if channel_name and channel_name.strip():
+            c_name = channel_name.lower().strip()
+            for vc in interaction.guild.voice_channels:
+                if c_name in vc.name.lower():
+                    target_vc = vc
+                    break
+
+        if not target_vc and isinstance(
+            interaction.channel, (discord.VoiceChannel, discord.StageChannel)
+        ):
+            target_vc = interaction.channel
+
+        if not target_vc and interaction.user.voice and interaction.user.voice.channel:
+            target_vc = interaction.user.voice.channel
+
+        if not target_vc:
+            if channel_name:
+                return await interaction.response.send_message(
+                    f"❌ Voice Channel containing '{channel_name}' was not found."
+                )
+            return await interaction.response.send_message(
+                "❌ Please specify a voice channel name, join a voice channel, or run this command inside a voice channel text chat."
+            )
+
+        members = target_vc.members
+        embed = discord.Embed(
+            title=f"🔊 Voice Channel: {target_vc.name}",
+            color=discord.Color.blue(),
+        )
+
+        if not members:
+            embed.description = "ℹ️ Currently, there is no one in this Voice Channel."
+        else:
+            member_list = [f"• {m.mention} ({m.display_name})" for m in members]
+            embed.description = f"**Total Members:** {len(members)}\n\n" + "\n".join(
+                member_list
+            )
+
+        embed.set_footer(text=f"Server: {interaction.guild.name} • Nexo KSM AIoT")
+        await interaction.response.send_message(embed=embed)
 
 
 async def setup(bot):
