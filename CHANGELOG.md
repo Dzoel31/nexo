@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.1.3 (2026-08-11)
+
+### Bug Fixes
+
+- **ci**: Update tag regex in docker-prune workflow to support semver tags without v prefix
+  ([`3300ddd`](https://github.com/ksm-aiot-upnvj/nexo/commit/3300ddd6bcc75cbf0f9cfcc3b310e1e883c73658))
+
+
 ## v1.1.2 (2026-08-11)
 
 ### Bug Fixes
