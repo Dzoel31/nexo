@@ -47,10 +47,10 @@ jobs:
           ALL=$(fetch_tags)
 
           echo "=== Pruning old tags for $REPO ==="
-          # Ambil hanya tag rilis (diawali dengan 'v'), abaikan 'latest'
+          # Ambil tag rilis semver (seperti 1.1.2 atau v1.1.2), abaikan 'latest'
           LIST=$(echo "$ALL" | jq -r '
             .results[]
-            | select(.name | test("^v"))
+            | select(.name != "latest" and (.name | test("^[vV]?[0-9]")))
             | [.name, .last_updated] | @tsv
           ' | sort -k2 -r)
 
