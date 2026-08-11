@@ -45,6 +45,7 @@ minor_re = "(?i)^(feat)"
 patch_re = "(?i)^(fix|perf|refactor)"
 
 [tool.semantic_release.changelog]
+template_dir = ".templates"
 exclude_commit_patterns = [
     '''chore(?:\([^)]*?\))?: .+''',
     '''ci(?:\([^)]*?\))?: .+''',
