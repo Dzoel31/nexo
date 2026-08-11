@@ -28,11 +28,11 @@ Berdasarkan pertimbangan perangkat keras (4 Core CPU, sisa RAM 5 GB), pengembang
 - [x] MCP Integration untuk membaca skema sensor hidroponik secara langsung (*Direct Injection*).
 - [x] Pydantic Validation (Dasar).
 
-### 🟡 Fase 2: Gateway, WebHooks & Auto-Deploy (Pigeon Style) - *Persiapan*
-- **FastAPI WebHook Gateway:** Menerima *payload* dari GitHub dengan perlindungan otentikasi HMAC.
-- **Pydantic & Jinja Templating:** Memvalidasi struktur JSON Webhook secara ketat dengan Pydantic, lalu merender notifikasi yang rapi menggunakan Jinja Template sebelum dikirim ke Discord.
-- **Auto-Deploy Engine:** Eksekusi otomatis sintaks deployment (contoh: `docker compose pull && docker compose up -d`) pada *path* proyek yang sesuai ketika ada rilis atau *push* dari GitHub.
-- **Observability API:** Endpoint terpisah untuk memantau status sistem dan kesehatan bot dari *Web Dashboard*.
+### 🟢 Fase 2: Gateway, WebHooks & Auto-Deploy (Pigeon Style) - *Rampung*
+- [x] **FastAPI WebHook Gateway:** Menerima *payload* dari GitHub dengan perlindungan otentikasi HMAC SHA-256 (`verify_signature`).
+- [x] **Pydantic & Jinja Templating:** Memvalidasi struktur JSON Webhook secara ketat dengan Pydantic, lalu merender notifikasi yang rapi menggunakan Jinja Template sebelum dikirim ke Discord.
+- [x] **Auto-Deploy Engine:** Eksekusi otomatis sintaks deployment (`docker compose pull`, `up -d`, `prune -f`, `ps --format json`) pada *path* proyek yang sesuai ketika workflow GitHub Actions selesai.
+- [x] **Observability API:** Endpoint `/health` untuk memantau status sistem dan kesehatan bot.
 
 ### 🔴 Fase 3: Skalabilitas Vektor - *Ditunda (Sampai Tools Melebihi Batas Context Window)*
 - PostgreSQL Database & Vector DB (`pgvector`).
@@ -88,10 +88,10 @@ Berdasarkan pertimbangan perangkat keras (4 Core CPU, sisa RAM 5 GB), pengembang
 ## 5. Daftar Tugas Implementasi (Task List)
 
 **INGRESS & GATEWAY**
-- [ ] Setup endpoint GitHub Webhooks dengan FastAPI.
-- [ ] Implementasi *Pydantic Schema* untuk parsing payload GitHub dan *Jinja Templating* untuk notifikasi Discord.
-- [ ] Implementasi sistem *Auto-Deploy* (menjalankan sintaks shell seperti `docker compose up` berdasarkan payload).
-- [ ] Implementasi HMAC Webhook Signature, Deduplication, & Guardrails.
+- [x] Setup endpoint GitHub Webhooks dengan FastAPI (`utils/gateway_server.py`).
+- [x] Implementasi *Pydantic Schema* (`utils/webhook_schemas.py`) untuk parsing payload GitHub dan *Jinja Templating* (`templates/*.j2`) untuk notifikasi Discord.
+- [x] Implementasi sistem *Auto-Deploy* (menjalankan sintaks shell `docker compose pull`, `up -d`, `prune -f` berdasarkan payload).
+- [x] Implementasi HMAC Webhook Signature (`verify_signature`), Deduplication, & Guardrails.
 
 **AGENT & INFERENCE**
 - [x] Buat *Context & Date Resolver* (Pydantic & Dynamic System Context).
@@ -112,6 +112,7 @@ Berdasarkan pertimbangan perangkat keras (4 Core CPU, sisa RAM 5 GB), pengembang
 **DISCORD COGS & USER FEATURES**
 - [x] Pembuatan Cog *Community*: Sistem Onboarding (auto-role & welcome message) dan Absensi Voice Channel (`check_voice_channel`, `$vc`, `/voice`).
 - [x] Pembuatan Cog *Utilities*: Polling dinamis (`create_discord_poll`), Manajemen *Discord Threads* (pembuatan & auto-archive), dan Perintah Reset Konteks Memori (`$reset`, `/reset`).
+- [x] Pembuatan Cog *Webhook & Deployment*: FastAPI Gateway (`/webhook`), Jinja2 embed notification, dan otomatisasi Docker Compose Deployment (`cogs/webhook_deploy.py`).
 - [ ] Pembuatan Cog *Scheduler*: Sinkronisasi kalender dan *blast* pengingat rapat (`discord.ext.tasks`).
 - [ ] Pembuatan Cog *Lab Assistant*: *Tool* untuk query Inventaris Lab IoT dan monitoring status Sensor (*Snapshot* suhu/kelembaban).
 - [ ] (Future) Pembuatan *tool* eksekusi fisik (contoh: MQTT *publish* ke relay ESP32) berserta *role permission checker*.

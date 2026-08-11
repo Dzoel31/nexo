@@ -1,0 +1,19 @@
+{
+  "content": "{{ config.emoji }} **{{ config.title }}**\n{% if config.discord_role_id %}<@&{{ config.discord_role_id }}>{% else %}@everyone{% endif %}",
+  "embeds": [
+    {
+      "title": "{{ config.emoji }} {{ config.title }} di {{ data.repository.full_name }}",
+      "url": "{{ data.workflow_run.html_url if data.workflow_run and data.workflow_run.html_url else data.repository.html_url }}",
+      "color": 3447003,
+      "description": "Layanan **{{ data.repository.name }}** telah berhasil di-deploy melalui workflow **{{ data.workflow_run.name if data.workflow_run else 'Continuous Delivery' }}**.",
+      "fields": [
+        {"name": "Repo", "value": "{{ data.repository.full_name }}", "inline": true},
+        {"name": "Triggered By", "value": "{{ data.workflow_run.triggering_actor.login if data.workflow_run and data.workflow_run.triggering_actor else (data.sender.login if data.sender else 'System') }}", "inline": true},
+        {"name": "Status", "value": "✅ Sukses (Pipeline Passed)", "inline": true}
+      ],
+      "footer": {
+        "text": "Nexo CD Pipeline Service"
+      }
+    }
+  ]
+}
