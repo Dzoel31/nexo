@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       DH_USER: ${{ secrets.DOCKER_USERNAME }}
-      DH_PASS: ${{ secrets.DOCKER_PUSH }}
+      DH_PASS: ${{ secrets.DOCKER_RELEASE }}
       REPO: "nexo-bot"
       KEEP: "5"
     steps:
