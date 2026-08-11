@@ -4,6 +4,7 @@ import logging
 from datetime import datetime
 import traceback
 import aiohttp
+import discord
 from mcp import ClientSession
 from mcp.client.sse import sse_client
 from openai import AsyncOpenAI
@@ -196,10 +197,33 @@ async def process_with_mcp_tools(
     messages.extend(bot.conversation_history.get(user_id, []))
 
     current_time_str = datetime.now().strftime("%A, %d %B %Y - %H:%M WIB")
+
+    # Extract Channel & Voice Channel info from ctx_obj
+    channel_name = "Unknown"
+    is_voice_chat = False
+    user_vc_name = "None"
+
+    if ctx_obj and hasattr(ctx_obj, "channel") and ctx_obj.channel:
+        channel_name = getattr(ctx_obj.channel, "name", "Unknown")
+        is_voice_chat = isinstance(
+            ctx_obj.channel, (discord.VoiceChannel, discord.StageChannel)
+        )
+
+    user_obj = getattr(ctx_obj, "author", getattr(ctx_obj, "user", None))
+    if (
+        user_obj
+        and hasattr(user_obj, "voice")
+        and user_obj.voice
+        and user_obj.voice.channel
+    ):
+        user_vc_name = user_obj.voice.channel.name
+
     dynamic_user_prompt = (
         f"<system_context>\n"
         f"Current Time WIB: {current_time_str}\n"
         f"User: {user_name} (<@{user_id}>)\n"
+        f"Current Channel: #{channel_name} (Is Voice Chat: {is_voice_chat})\n"
+        f"User Connected Voice Channel: {user_vc_name}\n"
         f"</system_context>\n"
         f"{user_question}"
     )

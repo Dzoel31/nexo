@@ -1,0 +1,18 @@
+{
+  "ksm-aiot-upnvj/learning": {
+    "team_name": "Tim Kurikulum / Learning",
+    "discord_channel_id": null,
+    "discord_role_id": null,
+    "title": "Dokumentasi Pembelajaran Diperbarui!",
+    "emoji": "📚",
+    "deploy_path": null
+  },
+  "ksm-aiot-upnvj/nexo": {
+    "team_name": "Tim Core Nexo",
+    "discord_channel_id": null,
+    "discord_role_id": null,
+    "title": "Nexo Bot Service Diperbarui!",
+    "emoji": "🤖",
+    "deploy_path": null
+  }
+}

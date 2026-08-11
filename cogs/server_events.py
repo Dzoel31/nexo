@@ -254,17 +254,38 @@ class ServerEvents(commands.Cog):
             if not ctx_obj or not ctx_obj.guild:
                 return "❌ Cannot check voice channel because the server (guild) context was not found."
 
-            channel_name = schema.channel_name.lower()
-
-            # Find the relevant voice channel
             target_vc = None
-            for vc in ctx_obj.guild.voice_channels:
-                if channel_name in vc.name.lower():
-                    target_vc = vc
-                    break
+
+            # 1. Search by channel_name if specified
+            if schema.channel_name and schema.channel_name.strip():
+                c_name = schema.channel_name.lower().strip()
+                for vc in ctx_obj.guild.voice_channels:
+                    if c_name in vc.name.lower():
+                        target_vc = vc
+                        break
+
+            # 2. Fallback to current channel if it is a Voice/Stage Channel (Voice Chat text channel)
+            if not target_vc and hasattr(ctx_obj, "channel"):
+                if isinstance(
+                    ctx_obj.channel, (discord.VoiceChannel, discord.StageChannel)
+                ):
+                    target_vc = ctx_obj.channel
+
+            # 3. Fallback to the user's currently connected Voice Channel
+            if not target_vc:
+                user_obj = getattr(ctx_obj, "author", getattr(ctx_obj, "user", None))
+                if (
+                    user_obj
+                    and hasattr(user_obj, "voice")
+                    and user_obj.voice
+                    and user_obj.voice.channel
+                ):
+                    target_vc = user_obj.voice.channel
 
             if not target_vc:
-                return f"❌ Voice Channel containing the word '{schema.channel_name}' was not found."
+                if schema.channel_name:
+                    return f"❌ Voice Channel containing the word '{schema.channel_name}' was not found."
+                return "❌ No voice channel specified, and you are not currently in a voice channel nor typing inside a voice channel text chat."
 
             members = target_vc.members
             if not members:
@@ -367,11 +388,11 @@ class ServerEvents(commands.Cog):
             welcome_msg = (
                 f"Welcome {member.mention} to the AIoT server! 👋\n"
                 f"Please introduce yourself using the following format:\n\n"
-                f"Nama:\n"
-                f"Nama Panggilan:\n"
-                f"Angkatan:\n"
-                f"Hobi:\n"
-                f"Minat:\n"
+                f"Name:\n"
+                f"Nickname:\n"
+                f"Batch/Year:\n"
+                f"Hobby:\n"
+                f"Interest:\n"
             )
             await channel.send(welcome_msg)
 
@@ -388,7 +409,7 @@ class ServerEvents(commands.Cog):
             content = message.content.lower()
 
             # Check if all introduction format keywords are present in the message
-            keywords = ["nama:", "nama panggilan:", "angkatan:", "hobi:", "minat:"]
+            keywords = ["name:", "nickname:", "batch/year:", "hobby:", "interest:"]
             if all(keyword in content for keyword in keywords):
                 # Find the 'Member' role in the server
                 role = discord.utils.get(message.guild.roles, name="Member")
@@ -396,11 +417,11 @@ class ServerEvents(commands.Cog):
                 if role:
                     try:
                         await message.author.add_roles(role)
-                        await message.add_reaction("✅")
+                        await message.add_reaction("👋")
 
-                        # Extract Nama Panggilan using regex
+                        # Extract Nickname using regex
                         match = re.search(
-                            r"nama panggilan:\s*(.+)", message.content, re.IGNORECASE
+                            r"nickname:\s*(.+)", message.content, re.IGNORECASE
                         )
                         if match:
                             nickname = match.group(1).strip()

@@ -57,6 +57,7 @@ async def main():
         "cogs.core_commands",
         "cogs.agent_orchestrator",
         "cogs.server_events",
+        "cogs.webhook_deploy",
     ]
 
     for cog in cogs_to_load:
@@ -65,6 +66,11 @@ async def main():
             logger.info(f"Loaded {cog} successfully")
         except Exception as e:
             logger.error(f"Failed to load cog {cog}: {e}")
+
+    # Launch FastAPI Webhook Gateway Server in background task
+    from utils.gateway_server import start_gateway_server
+
+    asyncio.create_task(start_gateway_server(bot))
 
     await bot.start(TOKEN)
 

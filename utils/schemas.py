@@ -64,7 +64,7 @@ class ClearMessagesSchema(BaseModel):
 
 
 class CheckVoiceChannelSchema(BaseModel):
-    channel_name: str = Field(
-        ...,
-        description="Name of the Voice Channel to check (case-insensitive, e.g., 'Meeting')",
+    channel_name: Optional[str] = Field(
+        default=None,
+        description="Name of the Voice Channel to check (case-insensitive, e.g., 'Meeting'). Optional: if omitted, defaults to the current channel or the user's active voice channel.",
     )
