@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.1.2 (2026-08-11)
+
+### Bug Fixes
+
+- **ci**: Update docker hub secret name to DOCKER_RELEASE
+  ([`558b3ce`](https://github.com/ksm-aiot-upnvj/nexo/commit/558b3ceebda75c1d610c55db13f90d8b53ccf838))
+
+
 ## v1.1.1 (2026-08-11)
 
 ### Bug Fixes
