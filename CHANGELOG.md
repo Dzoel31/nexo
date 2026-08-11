@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.1.1 (2026-08-11)
+
+### Bug Fixes
+
+- **ci**: Allow docker build and push workflow for all release tag formats
+  ([`6f47d7e`](https://github.com/ksm-aiot-upnvj/nexo/commit/6f47d7ec41957d20a315a10651174e741bfcd1bd))
+
+
 ## v1.0.0 (2026-08-11)
 
 - Initial Release
