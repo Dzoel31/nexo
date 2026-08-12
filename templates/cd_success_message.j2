@@ -1,5 +1,5 @@
 {
-  "content": "{{ config.emoji }} **{{ config.title }}**\n{% if config.discord_role_id %}<@&{{ config.discord_role_id }}>{% else %}@everyone{% endif %}",
+  "content": "{{ config.emoji }} **{{ config.title }}**{% if config.discord_role_id %}\n<@&{{ config.discord_role_id }}>{% endif %}",
   "embeds": [
     {
       "title": "{{ config.emoji }} {{ config.title }} di {{ data.repository.full_name }}",
