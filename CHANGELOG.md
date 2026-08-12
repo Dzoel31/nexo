@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.4.0 (2026-08-12)
+
+### Features
+
+- **deploy**: Configure VPS deployment paths and update gateway port to 8002
+  ([`4b3c7ca`](https://github.com/ksm-aiot-upnvj/nexo/commit/4b3c7ca3e0e16ff6827f3e11345c2b0d55ede8e5))
+
+
 ## v1.3.0 (2026-08-12)
 
 ### Features
