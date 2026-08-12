@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.1.4 (2026-08-12)
+
+### Bug Fixes
+
+- **templates**: Remove @everyone fallback when discord_role_id is null
+  ([`3d65f51`](https://github.com/ksm-aiot-upnvj/nexo/commit/3d65f5191672284284a6ee4912f4f783ea0da79b))
+
+
 ## v1.1.3 (2026-08-11)
 
 ### Bug Fixes
