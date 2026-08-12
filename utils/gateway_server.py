@@ -114,6 +114,35 @@ async def webhook_handler(request: Request):
     }
 
     cog = _bot.get_cog("WebhookDeployCog") if _bot else None
+    projects_config = load_projects_config()
+
+    if event == "ping":
+        zen = payload.get("zen", "GitHub Webhook Connected!")
+        repo_data = payload.get("repository", {}) or {}
+        repo_full_name = repo_data.get("full_name", "")
+        repo_name = repo_data.get("name", "")
+        repo_config = projects_config.get(
+            repo_full_name, projects_config.get(repo_name, {})
+        )
+
+        logger.info(f"GitHub ping event received: '{zen}' | delivery={delivery}")
+
+        if cog:
+            ping_msg = {
+                "content": (
+                    f"🟢 **GitHub Webhook Connected!**\n"
+                    f"Repo: **{repo_full_name or repo_name or 'GitHub Organization'}**\n"
+                    f'Quote: *"{zen}"*'
+                )
+            }
+            target_channel_id = repo_config.get("discord_channel_id")
+            asyncio.create_task(
+                cog.send_discord_notification(
+                    ping_msg, target_channel_id=target_channel_id
+                )
+            )
+
+        return {"status": "ping_received", "zen": zen, "delivery": delivery}
 
     schema_cls = schema_map.get(event)
     if schema_cls is None:
