@@ -2,6 +2,20 @@
 
 <!-- version list -->
 
+## v1.7.0 (2026-08-12)
+
+### Features
+
+- **gateway**: Defer CD announcements until VPS deploy succeeds and format release notes
+  ([`c19348d`](https://github.com/ksm-aiot-upnvj/nexo/commit/c19348d5902ba64aed0358f525f7ccc5b217aa3b))
+
+- **templates**: Integrate and format documentation update announcements
+  ([`72395bf`](https://github.com/ksm-aiot-upnvj/nexo/commit/72395bf4448b636ea71ddd891ea906a1ece4939b))
+
+- **templates**: Remove large image rendering across embeds for compact UI
+  ([`5443a89`](https://github.com/ksm-aiot-upnvj/nexo/commit/5443a8975b44ca086d6d69226f303e9e9ac9354e))
+
+
 ## v1.6.0 (2026-08-12)
 
 ### Features
