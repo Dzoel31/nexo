@@ -30,7 +30,6 @@
         {"name": "Branch", "value": "{{ data.workflow_run.head_branch }}", "inline": true},
         {"name": "Author", "value": "{{ data.workflow_run.triggering_actor.login }}", "inline": true}
       ],
-      "image": {"url": "{{ data.workflow_run.triggering_actor.avatar_url }}?s=512"},
       "thumbnail": {"url": "{{ data.workflow_run.triggering_actor.avatar_url }}?s=64"},
       "footer": {
         "text": "Time: {{ data.workflow_run.updated_at | default('Unknown') }}"

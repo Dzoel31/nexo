@@ -26,7 +26,6 @@
         {"name": "Total Commits", "value": "{{ data.commits|length if data.commits else 0 }}", "inline": true},
         {"name": "Pusher", "value": "{{ data.pusher.name }}", "inline": true}
       ],
-      "image": {"url": " {{ data.repository.owner.avatar_url }}"},
       "thumbnail": {"url": "{{ data.sender.avatar_url }}"},
       "footer": {
         "text": "Time: {{ data.head_commit.timestamp | default('Unknown') }}"

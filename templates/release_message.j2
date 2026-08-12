@@ -32,7 +32,6 @@
         {"name": "prerelease", "value": "{{ data.release.prerelease }}", "inline": true},
         {"name": "Author", "value": "{{ data.release.author.login }}", "inline": true}
       ],
-      "image": {"url": "{{ data.release.author.avatar_url }}"},
       "thumbnail": {"url": "{{ data.release.author.avatar_url }}"},
       "footer": {
         "text": "Time: {{ data.release.updated_at | default('Unknown') }}"
