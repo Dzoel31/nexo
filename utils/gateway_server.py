@@ -222,12 +222,29 @@ async def webhook_handler(request: Request):
                 )
             )
 
+            # Global #release-notes Broadcast if CD Success
+            if is_cd_success:
+                release_notes_channel_id = int(
+                    os.environ.get("WEBHOOK_RELEASE_NOTES_CHANNEL_ID", 0) or 0
+                )
+                if (
+                    release_notes_channel_id
+                    and release_notes_channel_id != target_channel_id
+                ):
+                    asyncio.create_task(
+                        cog.send_discord_notification(
+                            message_payload, target_channel_id=release_notes_channel_id
+                        )
+                    )
+
             # Auto-Deploy Trigger Check
             repo_key = repo_name or repo_full_name
             if is_cd_success and event == "workflow_run":
                 asyncio.create_task(
                     cog.trigger_docker_compose(
-                        repo_key=repo_key, repo_name=repo_full_name
+                        repo_key=repo_key,
+                        repo_name=repo_full_name,
+                        target_channel_id=target_channel_id,
                     )
                 )
 

@@ -1,18 +1,34 @@
 {
   "ksm-aiot-upnvj/learning": {
     "team_name": "Tim Kurikulum / Learning",
-    "discord_channel_id": null,
-    "discord_role_id": null,
+    "discord_channel_id": 1492053872456503406,
+    "discord_role_id": 1492043718520209589,
     "title": "Dokumentasi Pembelajaran Diperbarui!",
     "emoji": "📚",
     "deploy_path": null
   },
   "ksm-aiot-upnvj/nexo": {
     "team_name": "Tim Core Nexo",
-    "discord_channel_id": null,
+    "discord_channel_id": 1520017240097951774,
     "discord_role_id": null,
-    "title": "Nexo Bot Service Diperbarui!",
+    "title": "Nexo Bot Diperbarui!",
     "emoji": "🤖",
+    "deploy_path": null
+  },
+  "ksm-aiot-upnvj/smart-hydroponic": {
+    "team_name": "Tim Smart Hydroponic",
+    "discord_channel_id": 1487440244549615717,
+    "discord_role_id": 1510810906521767956,
+    "title": "Smart Hydroponic Diperbarui!",
+    "emoji": "🌱",
+    "deploy_path": null
+  },
+  "ksm-aiot-upnvj/smart-hydroponic-mcp": {
+    "team_name": "Tim Smart Hydroponic",
+    "discord_channel_id": 1487440244549615717,
+    "discord_role_id": 1510810906521767956,
+    "title": "Smart Hydroponic MCP Diperbarui!",
+    "emoji": "🌱",
     "deploy_path": null
   }
 }
