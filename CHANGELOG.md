@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.5.0 (2026-08-12)
+
+### Features
+
+- **gateway**: Update webhook endpoints to /nexo/webhook and enhance interactive help UI
+  ([`76ffae6`](https://github.com/ksm-aiot-upnvj/nexo/commit/76ffae6d43e6cb623694976dea1583ef0a509af7))
+
+
 ## v1.4.0 (2026-08-12)
 
 ### Features
