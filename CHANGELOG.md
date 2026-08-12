@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.2.0 (2026-08-12)
+
+### Features
+
+- **gateway**: Implement team-centric notification routing and global release broadcast
+  ([`18d139d`](https://github.com/ksm-aiot-upnvj/nexo/commit/18d139d5568998c5ea2e24dabb981216c8de8705))
+
+
 ## v1.1.4 (2026-08-12)
 
 ### Bug Fixes
