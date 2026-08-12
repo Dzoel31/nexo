@@ -2,9 +2,266 @@ import discord
 import logging
 from discord import app_commands
 from discord.ext import commands
-from utils.mcp_client import LLAMA_BASE_URL, MCP_SERVER_URL
+from utils.mcp_client import (
+    LLAMA_BASE_URL,
+    MCP_SERVER_URL,
+    get_tools_from_mcp_server,
+)
 
 logger = logging.getLogger("core_commands")
+
+
+class HelpSelect(discord.ui.Select):
+    def __init__(self, parent_view):
+        self.parent_view = parent_view
+        options = [
+            discord.SelectOption(
+                label="Meta & Overview",
+                description="General commands, latency, and status",
+                emoji="🌟",
+                value="0",
+            ),
+            discord.SelectOption(
+                label="AI & LLM Commands",
+                description="Slash commands & AI conversation controls",
+                emoji="🤖",
+                value="1",
+            ),
+            discord.SelectOption(
+                label="IoT & MCP Tools",
+                description="Live active tools connected via MCP Server",
+                emoji="🧰",
+                value="2",
+            ),
+            discord.SelectOption(
+                label="Webhook & Deployment",
+                description="GitHub Webhook Gateway & Auto-Deploy",
+                emoji="🚀",
+                value="3",
+            ),
+        ]
+        super().__init__(
+            placeholder="Select a category for more information...",
+            min_values=1,
+            max_values=1,
+            options=options,
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        self.parent_view.current_page = int(self.values[0])
+        await self.parent_view.update_message(interaction)
+
+
+class HelpView(discord.ui.View):
+    def __init__(self, bot: commands.Bot, author_id: int):
+        super().__init__(timeout=180)
+        self.bot = bot
+        self.author_id = author_id
+        self.current_page = 0
+        self.total_pages = 4
+
+        self.select_menu = HelpSelect(self)
+        self.add_item(self.select_menu)
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.author_id:
+            await interaction.response.send_message(
+                "❌ Help menu ini dibuka oleh pengguna lain. Ketik `$help` untuk membuka menu Anda sendiri!",
+                ephemeral=True,
+            )
+            return False
+        return True
+
+    async def fetch_mcp_tools_live(self):
+        try:
+            mcp_tools = await get_tools_from_mcp_server()
+            if mcp_tools:
+                self.bot.cached_mcp_tools = mcp_tools
+        except Exception as e:
+            logger.warning(f"Live MCP retrieval failed during help view: {e}")
+
+    async def build_embed(self) -> discord.Embed:
+        embed = discord.Embed(color=discord.Color.blue())
+        embed.set_author(
+            name=f"Page {self.current_page + 1}/{self.total_pages}",
+            icon_url=self.bot.user.display_avatar.url if self.bot.user else None,
+        )
+
+        if self.current_page == 0:
+            embed.title = "🌟 Meta & General Commands"
+            embed.description = (
+                "Perintah umum dan informasi status bot Nexo KSM AIoT.\n"
+                "─────────────────────────────"
+            )
+            embed.add_field(
+                name="Getting Started",
+                value=(
+                    "`$help` : Menampilkan panduan pengguna interaktif ini\n"
+                    "`$ping` : Cek latensi dan kecepatan respon bot ke Discord\n"
+                    "`$status` : Cek status kesehatan llama-server & MCP Server"
+                ),
+                inline=False,
+            )
+            embed.add_field(
+                name="Management & Moderation",
+                value=(
+                    "`$clear [limit]` : Hapus pesan percakapan secara masal (Admin)\n"
+                    "`$reset [user/all]` : Bersihkan memori percakapan AI"
+                ),
+                inline=False,
+            )
+
+        elif self.current_page == 1:
+            embed.title = "🤖 AI & LLM Commands"
+            embed.description = (
+                "Fitur kecerdasan buatan terintegrasi Llama.cpp & MCP.\n"
+                "─────────────────────────────"
+            )
+            embed.add_field(
+                name="Interactive AI Slash Commands",
+                value=(
+                    "`/tanya [pertanyaan]` : Bertanya ke AI Nexo (Terhubung ke sensor & IoT tools)\n"
+                    "`/reset` : Bersihkan riwayat percakapan konteks AI Anda"
+                ),
+                inline=False,
+            )
+            embed.add_field(
+                name="AI Tools Commands",
+                value=(
+                    "`$tools` / `/tools` : Tampilkan seluruh tools lokal & MCP aktif\n"
+                    "`$reset all` : Bersihkan seluruh memori AI server (Admin)"
+                ),
+                inline=False,
+            )
+            embed.add_field(
+                name="Fitur Otomatis",
+                value="- Menyambut anggota baru di channel *welcome*\n- Menugaskan role otomatis saat perkenalan",
+                inline=False,
+            )
+
+        elif self.current_page == 2:
+            embed.title = "🧰 IoT & MCP Tools (Live Active)"
+            embed.description = (
+                "Seluruh perkakas (tools) IoT & fungsi eksternal yang dapat diakses AI.\n"
+                "─────────────────────────────"
+            )
+            await self.fetch_mcp_tools_live()
+
+            # 1. Local Tools
+            local_tools = getattr(self.bot, "ai_tools", [])
+            if local_tools:
+                local_text = "\n".join(
+                    [
+                        f"• `{t.get('function', {}).get('name', 'Unknown')}`: {t.get('function', {}).get('description', 'Local Discord tool')}"
+                        for t in local_tools
+                    ]
+                )
+                embed.add_field(
+                    name="⚙️ Local Discord Tools", value=local_text, inline=False
+                )
+            else:
+                embed.add_field(
+                    name="⚙️ Local Discord Tools",
+                    value="*Tidak ada local tool.*",
+                    inline=False,
+                )
+
+            # 2. Live MCP Tools
+            mcp_tools = getattr(self.bot, "cached_mcp_tools", [])
+            if mcp_tools:
+                mcp_lines = []
+                for t in mcp_tools:
+                    fname = t.get("function", {}).get("name", "Unknown")
+                    fdesc = t.get("function", {}).get("description", "No description")
+                    mcp_lines.append(f"• `{fname}`: {fdesc}")
+                mcp_text = "\n".join(mcp_lines)
+                if len(mcp_text) > 1024:
+                    mcp_text = mcp_text[:1020] + "..."
+                embed.add_field(
+                    name="🌐 Live MCP External Tools (IoT)",
+                    value=mcp_text,
+                    inline=False,
+                )
+            else:
+                embed.add_field(
+                    name="🌐 Live MCP External Tools (IoT)",
+                    value="*MCP Server offline atau belum memiliki tools terdaftar.*",
+                    inline=False,
+                )
+
+        elif self.current_page == 3:
+            embed.title = "🚀 Webhook & Auto-Deploy Engine"
+            embed.description = (
+                "Informasi integrasi GitHub Webhook Gateway & CD Pipeline.\n"
+                "─────────────────────────────"
+            )
+            embed.add_field(
+                name="FastAPI Webhook Gateway",
+                value=(
+                    "• **Endpoint:** `/webhook` | `/api/v1/webhook` | `/nexo/webhook`\n"
+                    "• **Authentication:** HMAC SHA-256 (`X-Hub-Signature-256`)\n"
+                    "• **Routing:** Dikirim otomatis ke Channel Tim sesuai `projects.json`"
+                ),
+                inline=False,
+            )
+            embed.add_field(
+                name="Continuous Delivery (CD)",
+                value=(
+                    "• Otomatis me-recreate kontainer Docker VPS saat rilis sukses\n"
+                    "• Notifikasi rilis resmi disiarkan ke channel `#release-notes`"
+                ),
+                inline=False,
+            )
+
+        embed.set_footer(
+            text="Gunakan dropdown atau tombol di bawah untuk navigasi menu • Nexo KSM AIoT 🚀"
+        )
+        return embed
+
+    async def update_message(self, interaction: discord.Interaction):
+        embed = await self.build_embed()
+        await interaction.response.edit_message(embed=embed, view=self)
+
+    @discord.ui.button(label="<<", style=discord.ButtonStyle.secondary, row=1)
+    async def first_page(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        self.current_page = 0
+        await self.update_message(interaction)
+
+    @discord.ui.button(label="<", style=discord.ButtonStyle.primary, row=1)
+    async def prev_page(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        if self.current_page > 0:
+            self.current_page -= 1
+        await self.update_message(interaction)
+
+    @discord.ui.button(label=">", style=discord.ButtonStyle.primary, row=1)
+    async def next_page(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        if self.current_page < self.total_pages - 1:
+            self.current_page += 1
+        await self.update_message(interaction)
+
+    @discord.ui.button(label=">>", style=discord.ButtonStyle.secondary, row=1)
+    async def last_page(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        self.current_page = self.total_pages - 1
+        await self.update_message(interaction)
+
+    @discord.ui.button(label="🔄 Refresh MCP", style=discord.ButtonStyle.success, row=1)
+    async def refresh_mcp(
+        self, interaction: discord.Interaction, button: discord.ui.Button
+    ):
+        await interaction.response.defer()
+        await self.fetch_mcp_tools_live()
+        embed = await self.build_embed()
+        await interaction.followup.edit_message(
+            message_id=interaction.message.id, embed=embed, view=self
+        )
 
 
 class CoreCommands(commands.Cog):
@@ -16,92 +273,37 @@ class CoreCommands(commands.Cog):
         """Responds with the bot's latency."""
         await ctx.send(f"Pong! Latency: {round(self.bot.latency * 1000)}ms")
 
-    @commands.command()
+    @commands.command(name="help", aliases=["h", "guide"])
     async def help(self, ctx):
-        """Displays the Nexo bot usage guide."""
-        embed = discord.Embed(
-            title="🌟 Nexo KSM AIoT Bot Guide",
-            description="Hello! I am an AI assistant ready to help you on this server. Here is a list of commands you can use:",
-            color=discord.Color.blue(),
-        )
+        """Displays the Nexo bot usage guide with interactive UI."""
+        view = HelpView(self.bot, ctx.author.id)
+        embed = await view.build_embed()
+        await ctx.send(embed=embed, view=view)
 
-        embed.add_field(
-            name="💬 Slash Commands",
-            value=(
-                "`/tanya [question]` : Ask the AI directly (connected to Llama.cpp & IoT tools).\n"
-                "`/reset` : Reset your AI conversation context memory.\n"
-                "`/voice [channel]` : Check active members in a voice channel directly."
-            ),
-            inline=False,
-        )
-        embed.add_field(
-            name="🤖 Automatic Features",
-            value="- Greet new members in the *welcome* channel\n- Automatically assign roles upon introduction",
-            inline=False,
-        )
-        embed.add_field(
-            name="⚙️ Prefix Commands ($)",
-            value=(
-                "`$help` : Display this message\n"
-                "`$ping` : Check bot latency (delay)\n"
-                "`$status` : Check LLM and MCP server status\n"
-                "`$tools` : See the list of tools the AI can use\n"
-                "`$reset` : Reset your AI memory context (`$reset all` for admins)\n"
-                "`$voice` / `$vc` : Check active members in a voice channel"
-            ),
-            inline=False,
-        )
+    @app_commands.command(
+        name="help", description="Tampilkan panduan interaktif penggunaan Bot Nexo"
+    )
+    async def help_slash(self, interaction: discord.Interaction):
+        view = HelpView(self.bot, interaction.user.id)
+        embed = await view.build_embed()
+        await interaction.response.send_message(embed=embed, view=view)
 
-        embed.set_footer(text="KSM AI & IoT • Guiding You to the Future 🚀")
-        await ctx.send(embed=embed)
-
-    @commands.command()
+    @commands.command(name="tools", aliases=["mcp", "tool"])
     async def tools(self, ctx):
-        """List all available tools."""
-        embed = discord.Embed(
-            title="🔧 Nexo AI Tools List",
-            description="Here are all the capabilities (tools) currently accessible by the AI:",
-            color=discord.Color.green(),
-        )
+        """List all available tools with live MCP retrieval."""
+        view = HelpView(self.bot, ctx.author.id)
+        view.current_page = 2  # Jump to MCP Tools page directly
+        embed = await view.build_embed()
+        await ctx.send(embed=embed, view=view)
 
-        # 1. Local Tools (from Cogs)
-        local_tools = getattr(self.bot, "ai_tools", [])
-        if local_tools:
-            local_text = ""
-            for tool in local_tools:
-                name = tool.get("function", {}).get("name", "Unknown")
-                local_text += f"• `{name}`\n"
-            embed.add_field(
-                name="⚙️ Local Discord Tools", value=local_text, inline=False
-            )
-        else:
-            embed.add_field(
-                name="⚙️ Local Discord Tools",
-                value="*No local tools loaded.*",
-                inline=False,
-            )
-
-        # 2. MCP Tools (from External Server)
-        cached_mcp_tools = getattr(self.bot, "cached_mcp_tools", [])
-        if cached_mcp_tools:
-            mcp_text = ""
-            for tool in cached_mcp_tools:
-                name = tool.get("function", {}).get("name", "Unknown")
-                mcp_text += f"• `{name}`\n"
-            if len(mcp_text) > 1024:
-                mcp_text = mcp_text[:1020] + "..."
-            embed.add_field(
-                name="🌐 External MCP Tools (IoT)", value=mcp_text, inline=False
-            )
-        else:
-            embed.add_field(
-                name="🌐 External MCP Tools (IoT)",
-                value="*MCP Server is offline or has no tools.*",
-                inline=False,
-            )
-
-        embed.set_footer(text="Generated by Nexo KSM AIoT")
-        await ctx.send(embed=embed)
+    @app_commands.command(
+        name="tools", description="Tampilkan seluruh tools lokal & MCP aktif saat ini"
+    )
+    async def tools_slash(self, interaction: discord.Interaction):
+        view = HelpView(self.bot, interaction.user.id)
+        view.current_page = 2
+        embed = await view.build_embed()
+        await interaction.response.send_message(embed=embed, view=view)
 
     @commands.command()
     async def status(self, ctx):

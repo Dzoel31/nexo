@@ -77,7 +77,7 @@ def should_send_event(event_name: str, model: Any) -> bool:
     return True
 
 
-@app.get("/health")
+@app.get("/nexo/health")
 async def health_check():
     bot_online = _bot is not None and _bot.is_ready()
     return {
@@ -87,7 +87,7 @@ async def health_check():
     }
 
 
-@app.post("/webhook")
+@app.post("/nexo/webhook")
 async def webhook_handler(request: Request):
     event = request.headers.get("X-GitHub-Event", "unknown")
     delivery = request.headers.get("X-GitHub-Delivery", "unknown")
