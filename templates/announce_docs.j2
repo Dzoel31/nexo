@@ -1,22 +1,19 @@
 {
-  "content": "📚 **Dokumentasi Sudah Diperbarui**\n\n@everyone",
+  "content": "📚 **Dokumentasi Baru Diperbarui!**{% if config.discord_role_id %}\n<@&{{ config.discord_role_id }}>{% endif %}",
   "embeds": [
     {
-      "title": "📚 Dokumentasi diperbarui di IoT Learning Hub",
-      "url": "{{ data.repository.homepage if data.repository.homepage else data.repository.html_url }}",
+      "title": "📚 Dokumentasi {{ data.repository.name }} Diperbarui",
+      "url": "{{ data.repository.homepage if data.repository.homepage else (data.release.html_url if data.release and data.release.html_url else data.repository.html_url) }}",
       "color": 3447003,
-      "description": "Dokumentasi  **{{ data.repository.name }}**  telah diperbarui melalui workflow  **{{ data.workflow_run.name }}**.",
+      "description": "Dokumentasi **{{ data.repository.name }}** telah berhasil dipublikasikan melalui **{{ data.workflow_run.name if data.workflow_run else 'Deploy Documentation' }}**.\n{% if data.release and data.release.body %}\n\n**Catatan Perubahan Dokumentasi:**\n```markdown\n{{ data.release.body }}\n```{% elif data.workflow_run and data.workflow_run.display_title %}\n\n**Pembaruan:** {{ data.workflow_run.display_title }}{% endif %}",
       "fields": [
         {"name": "Repo", "value": "{{ data.repository.full_name }}", "inline": true},
-        {"name": "Version", "value": "{{ 'v' ~ version }}", "inline": true},
-        {"name": "Deployer", "value": "{{ data.workflow_run.actor.login }}", "inline": true},
-        {"name": "Status", "value": "{{ '✅ Sukses' if data.workflow_run.conclusion == 'success' else '❌ Gagal' }}", "inline": true},
-        {"name": "Changes", "value": "{{ release_description_json }}", "inline": false}
+        {"name": "Triggered By", "value": "{{ data.workflow_run.triggering_actor.login if data.workflow_run and data.workflow_run.triggering_actor else (data.sender.login if data.sender else 'System') }}", "inline": true},
+        {"name": "Status", "value": "✅ Sukses (Live)", "inline": true}
       ],
       "footer": {
-        "text": "Time: {{ data.workflow_run.updated_at | default('Unknown') }}"
-      },
-      "timestamp": "{{ data.workflow_run.updated_at | default('') }}"
+        "text": "Nexo Documentation Service • KSM AIoT"
+      }
     }
   ]
 }
