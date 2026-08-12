@@ -13,7 +13,7 @@
     "discord_role_id": null,
     "title": "Nexo Bot Diperbarui!",
     "emoji": "🤖",
-    "deploy_path": null
+    "deploy_path": "/home/admin-iot-hydroponik/ksm-aiot/nexo"
   },
   "ksm-aiot-upnvj/smart-hydroponic": {
     "team_name": "Tim Smart Hydroponic",
@@ -21,7 +21,7 @@
     "discord_role_id": 1510810906521767956,
     "title": "Smart Hydroponic Diperbarui!",
     "emoji": "🌱",
-    "deploy_path": null
+    "deploy_path": "/home/admin-iot-hydroponik/ksm-aiot/smart-hydroponic"
   },
   "ksm-aiot-upnvj/smart-hydroponic-mcp": {
     "team_name": "Tim Smart Hydroponic",
@@ -29,6 +29,6 @@
     "discord_role_id": 1510810906521767956,
     "title": "Smart Hydroponic MCP Diperbarui!",
     "emoji": "🌱",
-    "deploy_path": null
+    "deploy_path": "/home/admin-iot-hydroponik/ksm-aiot/smart-hydroponic-mcp"
   }
 }
