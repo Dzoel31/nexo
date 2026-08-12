@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.3.0 (2026-08-12)
+
+### Features
+
+- **deploy**: Configure docker-compose to pull ksmaiotupnvj/nexo-bot:latest and expose port 8000
+  ([`ddf61fb`](https://github.com/ksm-aiot-upnvj/nexo/commit/ddf61fb90476816c59790e62a7f52fc0251d21a6))
+
+
 ## v1.2.0 (2026-08-12)
 
 ### Features
