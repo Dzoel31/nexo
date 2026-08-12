@@ -168,9 +168,32 @@ class WebhookDeployCog(commands.Cog):
     ) -> tuple[int, str]:
         def _exec():
             # Executed safely with fixed list args and no shell expansion
+            exec_cmd = list(cmd)
+            actual_cwd = None
+
+            if work_dir and work_dir.exists():
+                actual_cwd = str(work_dir)
+            elif work_dir:
+                # If work_dir is a host VPS path not mounted in container, pass -f docker-compose.yml to docker compose
+                compose_file = work_dir / "docker-compose.yml"
+                if (
+                    len(exec_cmd) >= 2
+                    and exec_cmd[0] == "docker"
+                    and exec_cmd[1] == "compose"
+                ):
+                    exec_cmd = [
+                        "docker",
+                        "compose",
+                        "-f",
+                        str(compose_file),
+                    ] + exec_cmd[2:]
+                # Check fallback directory in container (/app)
+                if Path("/app").exists():
+                    actual_cwd = "/app"
+
             result = subprocess.run(  # nosec B603
-                cmd,
-                cwd=str(work_dir),
+                exec_cmd,
+                cwd=actual_cwd,
                 capture_output=True,
                 text=True,
                 timeout=300,
@@ -246,7 +269,11 @@ class WebhookDeployCog(commands.Cog):
         return embeds
 
     async def trigger_docker_compose(
-        self, repo_key: str, repo_name: str = "", target_channel_id: int | None = None
+        self,
+        repo_key: str,
+        repo_name: str = "",
+        target_channel_id: int | None = None,
+        announcement_payload: dict[str, Any] | None = None,
     ):
         self.project_paths = build_project_paths()
         work_dir = self.project_paths.get(repo_key)
@@ -314,6 +341,25 @@ class WebhookDeployCog(commands.Cog):
                 payload, target_channel_id=target_channel_id
             )
             logger.info(f"Docker compose deployment completed for {target_display}")
+
+            # 5. Send Rich CD Release Announcement after successful VPS Deployment
+            if announcement_payload:
+                await self.send_discord_notification(
+                    announcement_payload, target_channel_id=target_channel_id
+                )
+
+                # Broadcast to global #release-notes channel
+                release_notes_channel_id = int(
+                    os.environ.get("WEBHOOK_RELEASE_NOTES_CHANNEL_ID", 0) or 0
+                )
+                if (
+                    release_notes_channel_id
+                    and release_notes_channel_id != target_channel_id
+                ):
+                    await self.send_discord_notification(
+                        announcement_payload,
+                        target_channel_id=release_notes_channel_id,
+                    )
 
         except Exception as e:
             err_msg = truncate_output(str(e))

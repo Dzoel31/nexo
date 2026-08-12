@@ -49,9 +49,8 @@ def should_send_event(event_name: str, model: Any) -> bool:
     if event_name == "pull_request":
         allowed_actions = {
             "opened",
-            "reopened",
             "closed",
-            "edited",
+            "reopened",
             "synchronize",
             "ready_for_review",
             "converted_to_draft",
@@ -181,8 +180,6 @@ async def webhook_handler(request: Request):
 
         return {"status": "unsupported_event_stored", "event": event}
 
-    projects_config = load_projects_config()
-
     if not isinstance(payload, list):
         payload_items = [payload]
     else:
@@ -218,14 +215,35 @@ async def webhook_handler(request: Request):
 
         template_name = f"{event}_message.j2"
         is_cd_success = False
+        is_docs_update = False
+
         if event == "workflow_run" and getattr(model, "action", None) == "completed":
             wf_run = getattr(model, "workflow_run", None)
+            wf_name = (getattr(wf_run, "name", "") or "").lower()
             if wf_run and getattr(wf_run, "conclusion", None) == "success":
-                is_cd_success = True
-        elif event == "release" and getattr(model, "action", None) == "published":
+                if any(k in wf_name for k in ["doc", "docs", "documentation", "pages"]):
+                    is_docs_update = True
+                    is_cd_success = True
+                elif any(
+                    k in wf_name
+                    for k in [
+                        "release",
+                        "cd",
+                        "deploy",
+                        "docker",
+                        "continuous delivery",
+                    ]
+                ):
+                    is_cd_success = True
+        elif event == "release" and getattr(model, "action", None) in (
+            "published",
+            "released",
+        ):
             is_cd_success = True
 
-        if is_cd_success:
+        if is_docs_update:
+            template_name = "announce_docs.j2"
+        elif is_cd_success:
             template_name = "cd_success_message.j2"
 
         try:
@@ -245,35 +263,23 @@ async def webhook_handler(request: Request):
 
         if cog:
             target_channel_id = repo_config.get("discord_channel_id")
-            asyncio.create_task(
-                cog.send_discord_notification(
-                    message_payload, target_channel_id=target_channel_id
-                )
-            )
-
-            # Global #release-notes Broadcast if CD Success
-            if is_cd_success:
-                release_notes_channel_id = int(
-                    os.environ.get("WEBHOOK_RELEASE_NOTES_CHANNEL_ID", 0) or 0
-                )
-                if (
-                    release_notes_channel_id
-                    and release_notes_channel_id != target_channel_id
-                ):
-                    asyncio.create_task(
-                        cog.send_discord_notification(
-                            message_payload, target_channel_id=release_notes_channel_id
-                        )
-                    )
-
-            # Auto-Deploy Trigger Check
             repo_key = repo_name or repo_full_name
-            if is_cd_success and event == "workflow_run":
+
+            if is_cd_success:
+                # Defer sending rich CD announcement until AFTER VPS deployment succeeds
                 asyncio.create_task(
                     cog.trigger_docker_compose(
                         repo_key=repo_key,
                         repo_name=repo_full_name,
                         target_channel_id=target_channel_id,
+                        announcement_payload=message_payload,
+                    )
+                )
+            else:
+                # Standard non-CD event notification (Push, PR, In-progress workflow)
+                asyncio.create_task(
+                    cog.send_discord_notification(
+                        message_payload, target_channel_id=target_channel_id
                     )
                 )
 

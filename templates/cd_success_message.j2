@@ -3,16 +3,16 @@
   "embeds": [
     {
       "title": "{{ config.emoji }} {{ config.title }} di {{ data.repository.full_name }}",
-      "url": "{{ data.workflow_run.html_url if data.workflow_run and data.workflow_run.html_url else data.repository.html_url }}",
-      "color": 3447003,
-      "description": "Layanan **{{ data.repository.name }}** telah berhasil di-deploy melalui workflow **{{ data.workflow_run.name if data.workflow_run else 'Continuous Delivery' }}**.",
+      "url": "{{ data.release.html_url if data.release and data.release.html_url else (data.workflow_run.html_url if data.workflow_run and data.workflow_run.html_url else data.repository.html_url) }}",
+      "color": 3066993,
+      "description": "Layanan **{{ data.repository.name }}** telah berhasil di-deploy di VPS melalui **{{ data.release.tag_name if data.release and data.release.tag_name else (data.workflow_run.name if data.workflow_run else 'Continuous Delivery') }}**.\n{% if data.release and data.release.body %}\n\n**Release Notes / Catatan Perubahan:**\n```markdown\n{{ data.release.body }}\n```{% endif %}",
       "fields": [
         {"name": "Repo", "value": "{{ data.repository.full_name }}", "inline": true},
-        {"name": "Triggered By", "value": "{{ data.workflow_run.triggering_actor.login if data.workflow_run and data.workflow_run.triggering_actor else (data.sender.login if data.sender else 'System') }}", "inline": true},
-        {"name": "Status", "value": "✅ Sukses (Pipeline Passed)", "inline": true}
+        {"name": "Triggered By", "value": "{{ data.release.author.login if data.release and data.release.author else (data.workflow_run.triggering_actor.login if data.workflow_run and data.workflow_run.triggering_actor else (data.sender.login if data.sender else 'System')) }}", "inline": true},
+        {"name": "Status", "value": "✅ Sukses (VPS Deployed)", "inline": true}
       ],
       "footer": {
-        "text": "Nexo CD Pipeline Service"
+        "text": "Nexo CD Pipeline Service • KSM AIoT"
       }
     }
   ]
