@@ -1,10 +1,13 @@
 services:
   nexo-bot:
+    image: ksmaiotupnvj/nexo-bot:latest
     build:
       context: .
       dockerfile: Dockerfile
     container_name: nexo_bot
     restart: always
+    ports:
+      - "8000:8000"
     env_file:
       - .env
 
