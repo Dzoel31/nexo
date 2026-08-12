@@ -245,7 +245,9 @@ class WebhookDeployCog(commands.Cog):
 
         return embeds
 
-    async def trigger_docker_compose(self, repo_key: str, repo_name: str = ""):
+    async def trigger_docker_compose(
+        self, repo_key: str, repo_name: str = "", target_channel_id: int | None = None
+    ):
         self.project_paths = build_project_paths()
         work_dir = self.project_paths.get(repo_key)
         if not work_dir:
@@ -270,7 +272,9 @@ class WebhookDeployCog(commands.Cog):
                         f"Menarik image terbaru dan me-recreate kontainer Nexo dalam 5 detik..."
                     ),
                 }
-                await self.send_discord_notification(pre_payload)
+                await self.send_discord_notification(
+                    pre_payload, target_channel_id=target_channel_id
+                )
                 await asyncio.sleep(5)
 
             # 1. Pull
@@ -306,7 +310,9 @@ class WebhookDeployCog(commands.Cog):
             else:
                 payload["content"] += f"\n```\n{status_output}\n```"
 
-            await self.send_discord_notification(payload)
+            await self.send_discord_notification(
+                payload, target_channel_id=target_channel_id
+            )
             logger.info(f"Docker compose deployment completed for {target_display}")
 
         except Exception as e:
@@ -319,7 +325,9 @@ class WebhookDeployCog(commands.Cog):
                     f"```\n{err_msg}\n```"
                 ),
             }
-            await self.send_discord_notification(fail_payload)
+            await self.send_discord_notification(
+                fail_payload, target_channel_id=target_channel_id
+            )
 
 
 async def setup(bot):
