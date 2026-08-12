@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.6.0 (2026-08-12)
+
+### Features
+
+- **gateway**: Handle GitHub ping events gracefully and add ./data volume mount
+  ([`6c8df64`](https://github.com/ksm-aiot-upnvj/nexo/commit/6c8df64bbe6087bf3989bb295a509a594c98d714))
+
+
 ## v1.5.0 (2026-08-12)
 
 ### Features
