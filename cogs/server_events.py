@@ -381,7 +381,7 @@ class ServerEvents(commands.Cog):
     @commands.Cog.listener()
     async def on_member_join(self, member):
         """Send a welcome message when a new member joins"""
-        channel_id = int(os.environ.get("WELCOME_AND_RULES_CHANNEL", 0))
+        channel_id = int(os.environ.get("WELCOME_AND_RULES_CHANNEL_ID", 0))
         channel = self.bot.get_channel(channel_id)
 
         if channel:
@@ -403,7 +403,7 @@ class ServerEvents(commands.Cog):
         if message.author.bot:
             return
 
-        channel_id = int(os.environ.get("WELCOME_AND_RULES_CHANNEL", 0))
+        channel_id = int(os.environ.get("WELCOME_AND_RULES_CHANNEL_ID", 0))
         # Only monitor messages in the welcome-and-rules channel
         if message.channel.id == channel_id:
             content = message.content.lower()
