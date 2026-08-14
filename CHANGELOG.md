@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.7.1 (2026-08-14)
+
+### Bug Fixes
+
+- **events**: Update welcome channel env name and add new project configs
+  ([`5036551`](https://github.com/ksm-aiot-upnvj/nexo/commit/503655115d534a4aac1b2966438d581cd8a07e33))
+
+
 ## v1.7.0 (2026-08-12)
 
 ### Features
