@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.9.0 (2026-08-29)
+
+### Features
+
+- **config**: Add portainer webhook url for smart-hydroponic
+  ([`baccf66`](https://github.com/ksm-aiot-upnvj/nexo/commit/baccf66a31681891e6c7b558632a646e25146359))
+
+
 ## v1.8.0 (2026-08-29)
 
 ### Features
