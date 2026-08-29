@@ -1,0 +1,35 @@
+name: "Emergency Portainer Redeploy (Break-Glass)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Reason for emergency redeploy"
+        required: false
+        default: "Manual break-glass redeployment trigger"
+
+jobs:
+  portainer-redeploy:
+    name: "Trigger Portainer Webhook"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Portainer Webhook
+        shell: bash
+        env:
+          PORTAINER_WEBHOOK: ${{ secrets.PORTAINER_NEXO_WEBHOOK_URL }}
+        run: |
+          if [ -z "$PORTAINER_WEBHOOK" ]; then
+            echo "::error::Secret PORTAINER_NEXO_WEBHOOK_URL is not configured in repository secrets."
+            exit 1
+          fi
+
+          echo "🚀 Sending POST request to Portainer Webhook..."
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$PORTAINER_WEBHOOK")
+
+          echo "Portainer Response HTTP Status: $HTTP_STATUS"
+          if [[ "$HTTP_STATUS" == "200" || "$HTTP_STATUS" == "204" ]]; then
+            echo "✅ Portainer redeploy successfully triggered!"
+          else
+            echo "::error::Portainer webhook returned unexpected status $HTTP_STATUS"
+            exit 1
+          fi

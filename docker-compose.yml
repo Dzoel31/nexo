@@ -20,6 +20,8 @@ services:
     volumes:
       - ./prompts:/app/prompts
       - ./data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /home/admin-iot-hydroponik/ksm-aiot:/home/admin-iot-hydroponik/ksm-aiot:ro
 
     deploy:
       resources:

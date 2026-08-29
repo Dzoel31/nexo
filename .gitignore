@@ -175,3 +175,6 @@ pyrightconfig.json
 
 # End of https://www.toptal.com/developers/gitignore/api/python
 
+# Scratch & test scripts
+test_api_*.py
+test_api_docker_ce.py

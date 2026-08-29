@@ -55,9 +55,10 @@ def parse_compose_paths(raw_paths: str) -> dict[str, Path]:
     return compose_paths
 
 
-def build_project_paths() -> dict[str, Path]:
+def build_project_paths() -> tuple[dict[str, Path], dict[str, str]]:
     raw = os.environ.get("DOCKER_COMPOSE_PATHS", "")
     paths = parse_compose_paths(raw)
+    portainer_webhooks: dict[str, str] = {}
 
     backend = resolve_path(os.environ.get("PATH_BACKEND_HYDROPONIC", ""))
     if backend:
@@ -70,19 +71,24 @@ def build_project_paths() -> dict[str, Path]:
                 projects_data = json.load(f)
                 if isinstance(projects_data, dict):
                     for repo_key, cfg in projects_data.items():
-                        if isinstance(cfg, dict) and cfg.get("deploy_path"):
-                            res = resolve_path(str(cfg["deploy_path"]))
-                            if res:
-                                paths.setdefault(repo_key, res)
-                                # Also set for short name if full_name is repo_key
-                                short_name = repo_key.split("/")[-1]
-                                paths.setdefault(short_name, res)
+                        if isinstance(cfg, dict):
+                            short_name = repo_key.split("/")[-1]
+                            if cfg.get("deploy_path"):
+                                res = resolve_path(str(cfg["deploy_path"]))
+                                if res:
+                                    paths.setdefault(repo_key, res)
+                                    paths.setdefault(short_name, res)
+                            if cfg.get("portainer_webhook_url"):
+                                p_url = str(cfg["portainer_webhook_url"]).strip()
+                                if p_url:
+                                    portainer_webhooks[repo_key] = p_url
+                                    portainer_webhooks[short_name] = p_url
         except Exception as err:
             logger.warning(
-                f"Could not read deploy_path from config/projects.json: {err}"
+                f"Could not read deploy config from config/projects.json: {err}"
             )
 
-    return paths
+    return paths, portainer_webhooks
 
 
 def truncate_output(text: str, limit: int = 1800) -> str:
@@ -94,7 +100,7 @@ def truncate_output(text: str, limit: int = 1800) -> str:
 class WebhookDeployCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.project_paths = build_project_paths()
+        self.project_paths, self.portainer_webhooks = build_project_paths()
 
     async def send_discord_notification(
         self, payload: dict[str, Any], target_channel_id: int | None = None
@@ -191,18 +197,27 @@ class WebhookDeployCog(commands.Cog):
                 if Path("/app").exists():
                     actual_cwd = "/app"
 
-            result = subprocess.run(  # nosec B603
-                exec_cmd,
-                cwd=actual_cwd,
-                capture_output=True,
-                text=True,
-                timeout=300,
-                check=False,
-            )
-            combined = "\n".join(
-                line for line in [result.stdout.strip(), result.stderr.strip()] if line
-            )
-            return result.returncode, combined
+            try:
+                result = subprocess.run(  # nosec B603
+                    exec_cmd,
+                    cwd=actual_cwd,
+                    capture_output=True,
+                    text=True,
+                    timeout=300,
+                    check=False,
+                )
+                combined = "\n".join(
+                    line
+                    for line in [result.stdout.strip(), result.stderr.strip()]
+                    if line
+                )
+                return result.returncode, combined
+            except FileNotFoundError:
+                return (
+                    127,
+                    f"Command '{exec_cmd[0]}' tidak ditemukan di container. "
+                    "Pastikan Docker CLI terpasang atau gunakan Portainer Webhook.",
+                )
 
         return await asyncio.to_thread(_exec)
 
@@ -268,6 +283,81 @@ class WebhookDeployCog(commands.Cog):
 
         return embeds
 
+    async def trigger_portainer_webhook(
+        self,
+        webhook_url: str,
+        target_display: str,
+        target_channel_id: int | None = None,
+        announcement_payload: dict[str, Any] | None = None,
+    ):
+        logger.info(f"Triggering Portainer Webhook for {target_display}...")
+        is_self_update = "nexo" in target_display.lower()
+        if is_self_update:
+            pre_payload = {
+                "content": (
+                    f"🔄 **Self-Update Initiated for {target_display}**\n"
+                    f"Memicu Webhook Portainer untuk me-recreate kontainer Nexo..."
+                ),
+            }
+            await self.send_discord_notification(
+                pre_payload, target_channel_id=target_channel_id
+            )
+            # Beri jeda 2 detik agar pesan Discord terkirim tuntas sebelum kontainer di-restart
+            await asyncio.sleep(2)
+
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(webhook_url, timeout=30) as resp:
+                    if resp.status in (200, 204):
+                        logger.info(
+                            f"Portainer redeploy triggered successfully for {target_display}"
+                        )
+                        payload = {
+                            "content": (
+                                f"🚀 **Portainer Redeploy Triggered for {target_display}**\n"
+                                f"Webhook Portainer berhasil ditembak (Status `{resp.status}`). Kontainer sedang di-update..."
+                            )
+                        }
+                        await self.send_discord_notification(
+                            payload, target_channel_id=target_channel_id
+                        )
+
+                        if announcement_payload:
+                            await self.send_discord_notification(
+                                announcement_payload,
+                                target_channel_id=target_channel_id,
+                            )
+                            release_notes_channel_id = int(
+                                os.environ.get("WEBHOOK_RELEASE_NOTES_CHANNEL_ID", 0)
+                                or 0
+                            )
+                            if (
+                                release_notes_channel_id
+                                and release_notes_channel_id != target_channel_id
+                            ):
+                                await self.send_discord_notification(
+                                    announcement_payload,
+                                    target_channel_id=release_notes_channel_id,
+                                )
+                    else:
+                        text_resp = await resp.text()
+                        raise RuntimeError(
+                            f"Portainer webhook returned status {resp.status}: {text_resp}"
+                        )
+        except Exception as e:
+            err_msg = truncate_output(str(e))
+            logger.error(f"Portainer webhook trigger failed: {err_msg}")
+            fail_payload = {
+                "content": (
+                    f"❌ **Portainer Deploy Failed**\n"
+                    f"Repo: **{target_display}**\n"
+                    f"```\n{err_msg}\n```"
+                ),
+            }
+            await self.send_discord_notification(
+                fail_payload, target_channel_id=target_channel_id
+            )
+
     async def trigger_docker_compose(
         self,
         repo_key: str,
@@ -275,15 +365,28 @@ class WebhookDeployCog(commands.Cog):
         target_channel_id: int | None = None,
         announcement_payload: dict[str, Any] | None = None,
     ):
-        self.project_paths = build_project_paths()
-        work_dir = self.project_paths.get(repo_key)
-        if not work_dir:
-            logger.warning(
-                f"No Docker compose path configured for repo={repo_key}. Skipping deployment."
+        self.project_paths, self.portainer_webhooks = build_project_paths()
+        target_display = repo_name or repo_key
+
+        # 1. Cek apakah project menggunakan Portainer Webhook URL
+        portainer_url = self.portainer_webhooks.get(repo_key)
+        if portainer_url:
+            await self.trigger_portainer_webhook(
+                webhook_url=portainer_url,
+                target_display=target_display,
+                target_channel_id=target_channel_id,
+                announcement_payload=announcement_payload,
             )
             return
 
-        target_display = repo_name or repo_key
+        # 2. Direct Docker Compose CLI
+        work_dir = self.project_paths.get(repo_key)
+        if not work_dir:
+            logger.warning(
+                f"No Docker compose path or Portainer webhook configured for repo={repo_key}. Skipping deployment."
+            )
+            return
+
         is_self_update = "nexo" in target_display.lower()
 
         logger.info(
