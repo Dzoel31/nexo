@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.8.0 (2026-08-29)
+
+### Features
+
+- **deploy**: Integrate portainer webhook and add emergency fallback workflow
+  ([`eae7b23`](https://github.com/ksm-aiot-upnvj/nexo/commit/eae7b23cf4662442a92ceb3a810e1015a980fb8f))
+
+
 ## v1.7.2 (2026-08-29)
 
 ### Bug Fixes
