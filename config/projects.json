@@ -22,7 +22,8 @@
     "discord_role_id": 1510810906521767956,
     "title": "Smart Hydroponic Diperbarui!",
     "emoji": "🌱",
-    "deploy_path": "/home/admin-iot-hydroponik/ksm-aiot/smart-hydroponic"
+    "deploy_path": null,
+    "portainer_webhook_url": "http://103.147.92.179/api/stacks/webhooks/275b9d67-8707-415a-8204-b13ba61c8203"
   },
   "ksm-aiot-upnvj/smart-hydroponic-mcp": {
     "team_name": "Tim Smart Hydroponic",
