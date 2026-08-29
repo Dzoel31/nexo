@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.7.2 (2026-08-29)
+
+### Bug Fixes
+
+- **compose**: Migrate from env_file to explicit environment variables
+  ([`7502ba5`](https://github.com/ksm-aiot-upnvj/nexo/commit/7502ba57843284573b6a7bcd5d50192cb5dc55b2))
+
+
 ## v1.7.1 (2026-08-14)
 
 ### Bug Fixes
