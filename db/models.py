@@ -1,8 +1,18 @@
-from datetime import datetime
+from datetime import datetime, timezone
 import enum
 from uuid import UUID, uuid7
 
-from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, Text, func
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Boolean,
+    DateTime,
+    Enum,
+    ForeignKey,
+    String,
+    Text,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base
@@ -51,4 +61,46 @@ class Message(Base):
 
     conversation: Mapped["Conversation"] = relationship(
         "Conversation", back_populates="messages"
+    )
+
+
+class ScheduledEvent(Base):
+    __tablename__ = "scheduled_events"
+
+    # Primary Key menggunakan ID native dari Discord Scheduled Event
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, index=True)
+    guild_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+
+    # Konfigurasi Kanal Broadcast
+    broadcast_channel_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    broadcast_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+
+    # Metadata Acara
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    location: Mapped[str] = mapped_column(String(255), nullable=False)
+    start_time: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    end_time: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    event_url: Mapped[str] = mapped_column(String(255), nullable=False)
+
+    # Manajemen Interval (dalam menit)
+    reminder_intervals: Mapped[list[int]] = mapped_column(
+        JSON, default=list, nullable=False
+    )
+    reminders_sent: Mapped[list[int]] = mapped_column(
+        JSON, default=list, nullable=False
+    )
+
+    # Konfigurasi Template & Target Role
+    template_name: Mapped[str] = mapped_column(
+        String(100), default="default_reminder.j2", nullable=False
+    )
+    target_role_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)
     )

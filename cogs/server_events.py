@@ -1,22 +1,35 @@
-import discord
-import os
-import logging
-import re
-import json
-from discord.ext import commands
 import asyncio
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+import json
+import logging
+import os
+import re
 
+import discord
+from discord.ext import commands, tasks
+from sqlalchemy import select
+from sqlalchemy.orm.attributes import flag_modified
+
+from db.models import ScheduledEvent
+from db.session import async_session
+from utils.event_manager import (
+    format_indonesian_date,
+    format_time_wib,
+    get_human_time_label,
+    prune_reminder_intervals,
+)
 from utils.schemas import (
+    CheckVoiceChannelSchema,
+    ClearMessagesSchema,
     DiscordEventSchema,
-    DiscordThreadSchema,
     DiscordPollSchema,
+    DiscordThreadSchema,
+    EndDiscordEventSchema,
     EndDiscordPollSchema,
     GetServerChannelsSchema,
     GetServerRolesSchema,
-    ClearMessagesSchema,
-    CheckVoiceChannelSchema,
 )
+from utils.template_renderer import render_event_template
 
 logger = logging.getLogger("server_events")
 
@@ -24,6 +37,10 @@ logger = logging.getLogger("server_events")
 class ServerEvents(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self.reminder_loop.start()
+
+    def cog_unload(self):
+        self.reminder_loop.cancel()
 
     async def cog_load(self):
         # Initialize properties if they don't exist
@@ -39,6 +56,7 @@ class ServerEvents(commands.Cog):
             if t.get("function", {}).get("name")
             not in [
                 "create_discord_event",
+                "end_discord_event",
                 "create_discord_thread",
                 "create_discord_poll",
                 "end_discord_poll",
@@ -55,7 +73,7 @@ class ServerEvents(commands.Cog):
                 "type": "function",
                 "function": {
                     "name": "create_discord_event",
-                    "description": "Schedule a new Discord Event (Event/Meeting) on the Server. This tool requires the time (date & time WIB) and event description.",
+                    "description": "Schedule a new server event or meeting.",
                     "parameters": DiscordEventSchema.model_json_schema(),
                 },
             }
@@ -66,8 +84,20 @@ class ServerEvents(commands.Cog):
             {
                 "type": "function",
                 "function": {
+                    "name": "end_discord_event",
+                    "description": "End, close, or stop a Discord Scheduled Event.",
+                    "parameters": EndDiscordEventSchema.model_json_schema(),
+                },
+            }
+        )
+        self.bot.local_tool_handlers["end_discord_event"] = self.end_event_handler
+
+        self.bot.ai_tools.append(
+            {
+                "type": "function",
+                "function": {
                     "name": "create_discord_thread",
-                    "description": "Create a new Discord Thread in the user's current channel. Use this if the user asks to move the topic/discussion to a new thread.",
+                    "description": "Create a new thread in current channel.",
                     "parameters": DiscordThreadSchema.model_json_schema(),
                 },
             }
@@ -81,7 +111,7 @@ class ServerEvents(commands.Cog):
                 "type": "function",
                 "function": {
                     "name": "create_discord_poll",
-                    "description": "Create an interactive poll (Native Discord Poll) in the current channel.",
+                    "description": "Create an interactive native poll.",
                     "parameters": DiscordPollSchema.model_json_schema(),
                 },
             }
@@ -93,7 +123,7 @@ class ServerEvents(commands.Cog):
                 "type": "function",
                 "function": {
                     "name": "end_discord_poll",
-                    "description": "End, close, or stop an active Discord Poll in the current channel and retrieve the final voting results.",
+                    "description": "End an active poll and get final votes.",
                     "parameters": EndDiscordPollSchema.model_json_schema(),
                 },
             }
@@ -105,7 +135,7 @@ class ServerEvents(commands.Cog):
                 "type": "function",
                 "function": {
                     "name": "get_server_channels",
-                    "description": "Get a list of all text and voice channels on this server. Very useful for finding out channel IDs and server structure.",
+                    "description": "List all server text and voice channels.",
                     "parameters": GetServerChannelsSchema.model_json_schema(),
                 },
             }
@@ -117,7 +147,7 @@ class ServerEvents(commands.Cog):
                 "type": "function",
                 "function": {
                     "name": "get_server_roles",
-                    "description": "Get a list of all available roles on the server along with their IDs.",
+                    "description": "List all server roles and IDs.",
                     "parameters": GetServerRolesSchema.model_json_schema(),
                 },
             }
@@ -129,7 +159,7 @@ class ServerEvents(commands.Cog):
                 "type": "function",
                 "function": {
                     "name": "clear_messages",
-                    "description": "Delete messages in bulk in the current channel. Can only be used if the user has 'Manage Messages' permission. Can filter to delete only today's messages.",
+                    "description": "Delete messages in bulk.",
                     "parameters": ClearMessagesSchema.model_json_schema(),
                 },
             }
@@ -141,7 +171,7 @@ class ServerEvents(commands.Cog):
                 "type": "function",
                 "function": {
                     "name": "check_voice_channel",
-                    "description": "Check the list of users (members) currently in a specific Voice Channel.",
+                    "description": "List users in a voice channel.",
                     "parameters": CheckVoiceChannelSchema.model_json_schema(),
                 },
             }
@@ -151,7 +181,7 @@ class ServerEvents(commands.Cog):
         )
 
     async def create_event_handler(self, arguments: dict, ctx_obj=None) -> str:
-        """Function called by the LLM brain when the tool is used"""
+        """Function called by the LLM brain when create_discord_event tool is used"""
         try:
             # Strict validation using Pydantic
             event_data = DiscordEventSchema.model_validate(arguments)
@@ -181,7 +211,7 @@ class ServerEvents(commands.Cog):
 
             if vc:
                 # Create internal event (in a Voice/Stage Channel)
-                await guild.create_scheduled_event(
+                discord_event = await guild.create_scheduled_event(
                     name=event_data.name,
                     description=event_data.description,
                     start_time=start_dt,
@@ -195,7 +225,7 @@ class ServerEvents(commands.Cog):
                 loc_str = vc.name
             else:
                 # Create external event (Somewhere Else)
-                await guild.create_scheduled_event(
+                discord_event = await guild.create_scheduled_event(
                     name=event_data.name,
                     description=event_data.description,
                     start_time=start_dt,
@@ -206,11 +236,185 @@ class ServerEvents(commands.Cog):
                 )
                 loc_str = event_data.location
 
-            return f"✅ Successfully scheduled event '{event_data.name}' starting at {start_str} located at {loc_str}."
+            event_url = f"https://discord.com/events/{guild.id}/{discord_event.id}"
+
+            # Determine Announcement / Broadcast Channel
+            announcement_channel_id = int(
+                os.environ.get("ANNOUNCEMENT_CHANNEL_ID", "0")
+            )
+            broadcast_channel = None
+            if announcement_channel_id:
+                broadcast_channel = self.bot.get_channel(announcement_channel_id)
+                if not broadcast_channel:
+                    try:
+                        broadcast_channel = await self.bot.fetch_channel(
+                            announcement_channel_id
+                        )
+                    except Exception:
+                        broadcast_channel = None
+
+            if not broadcast_channel:
+                broadcast_channel = getattr(ctx_obj, "channel", guild.system_channel)
+
+            # Render Broadcast Template via Jinja2
+            initial_context = {
+                "event": {
+                    "name": event_data.name,
+                    "description": event_data.description or "",
+                    "location": loc_str,
+                    "event_url": event_url,
+                },
+                "formatted_date": format_indonesian_date(start_dt),
+                "formatted_time": format_time_wib(start_dt),
+                "role_mention": None,
+            }
+
+            broadcast_msg = None
+            if broadcast_channel:
+                try:
+                    rendered_msg = render_event_template(
+                        "events/broadcast_initial.j2", initial_context
+                    )
+                    broadcast_msg = await broadcast_channel.send(rendered_msg)
+                except Exception as b_err:
+                    logger.error(f"Failed to send initial event broadcast: {b_err}")
+
+            # Prune reminder intervals based on lead time
+            pruned_intervals = prune_reminder_intervals(start_dt)
+
+            # Persist ScheduledEvent to PostgreSQL database
+            async with async_session() as session:
+                db_event = ScheduledEvent(
+                    id=discord_event.id,
+                    guild_id=guild.id,
+                    broadcast_channel_id=broadcast_channel.id
+                    if broadcast_channel
+                    else guild.id,
+                    broadcast_message_id=broadcast_msg.id if broadcast_msg else None,
+                    name=event_data.name,
+                    description=event_data.description,
+                    location=loc_str,
+                    start_time=start_dt,
+                    end_time=end_dt,
+                    event_url=event_url,
+                    reminder_intervals=pruned_intervals,
+                    reminders_sent=[],
+                    template_name="default_reminder.j2",
+                    target_role_id=None,
+                    is_active=True,
+                )
+                session.add(db_event)
+                await session.commit()
+
+            channel_mention = (
+                f"<#{broadcast_channel.id}>"
+                if broadcast_channel
+                else "channel pengumuman"
+            )
+            return (
+                f"✅ Acara '{event_data.name}' berhasil dijadwalkan dan disiarkan ke {channel_mention}!\n"
+                f"🗓️ Waktu: {format_indonesian_date(start_dt)} pukul {format_time_wib(start_dt)} WIB\n"
+                f"📍 Lokasi: {loc_str}\n"
+                f"🔗 Link Event: {event_url}"
+            )
 
         except Exception as e:
             # Error can come from Pydantic (wrong format) or Discord API (400 Bad Request, past time, etc.)
             return f"❌ Failed to create event. Error: {str(e)} (If this is a 'Cannot schedule event in the past' error, it means you set the wrong time/date, make sure to set a future time)."
+
+    async def end_event_handler(self, arguments: dict, ctx_obj=None) -> str:
+        """Handler to end/stop a Discord Scheduled Event via tool calling"""
+        try:
+            req_data = EndDiscordEventSchema.model_validate(arguments)
+            if not self.bot.guilds:
+                return "❌ Failed: Bot is not currently in any server."
+            guild = (
+                getattr(ctx_obj, "guild", self.bot.guilds[0])
+                if ctx_obj
+                else self.bot.guilds[0]
+            )
+
+            target_event = None
+            if req_data.event_id:
+                target_event = guild.get_scheduled_event(req_data.event_id)
+                if not target_event:
+                    try:
+                        target_event = await guild.fetch_scheduled_event(
+                            req_data.event_id
+                        )
+                    except Exception:
+                        target_event = None
+            else:
+                events = list(guild.scheduled_events)
+                if not events:
+                    try:
+                        events = await guild.fetch_scheduled_events()
+                    except Exception:
+                        events = []
+
+                active_events = [
+                    e for e in events if e.status == discord.EventStatus.active
+                ]
+                if active_events:
+                    target_event = active_events[0]
+                elif events:
+                    target_event = events[0]
+
+            if not target_event:
+                return "❌ Tidak ditemukan acara aktif atau terjadwal di server untuk diakhiri."
+
+            # End event in Discord API
+            try:
+                await target_event.end()
+            except Exception as api_err:
+                logger.warning(
+                    f"Could not end event directly via target_event.end(): {api_err}"
+                )
+
+            # Update DB state
+            async with async_session() as session:
+                result = await session.execute(
+                    select(ScheduledEvent).where(ScheduledEvent.id == target_event.id)
+                )
+                db_event = result.scalar_one_or_none()
+                if db_event:
+                    db_event.is_active = False
+                    await session.commit()
+
+            # Send broadcast completed if channel available
+            announcement_channel_id = int(
+                os.environ.get("ANNOUNCEMENT_CHANNEL_ID", "0")
+            )
+            broadcast_channel = None
+            if announcement_channel_id:
+                broadcast_channel = self.bot.get_channel(announcement_channel_id)
+            if not broadcast_channel:
+                broadcast_channel = getattr(ctx_obj, "channel", guild.system_channel)
+
+            if broadcast_channel:
+                try:
+                    loc_name = target_event.location or (
+                        target_event.channel.name if target_event.channel else ""
+                    )
+                    comp_text = render_event_template(
+                        "events/broadcast_completed.j2",
+                        {
+                            "event": {
+                                "name": target_event.name,
+                                "location": loc_name,
+                                "event_url": f"https://discord.com/events/{guild.id}/{target_event.id}",
+                            },
+                            "role_mention": None,
+                        },
+                    )
+                    await broadcast_channel.send(comp_text)
+                except Exception as c_err:
+                    logger.error(f"Failed to send broadcast completed message: {c_err}")
+
+            return f"✅ Acara '{target_event.name}' berhasil diakhiri dan ditutup dari daftar server."
+
+        except Exception as e:
+            return f"❌ Gagal mengakhiri acara. Error: {str(e)}"
 
     async def create_thread_handler(self, arguments: dict, ctx_obj=None):
         try:
@@ -502,6 +706,243 @@ class ServerEvents(commands.Cog):
                     await message.reply(
                         "⚠️ The 'Member' role was not found on this server. Please tell the admin to create it."
                     )
+
+    @tasks.loop(seconds=60)
+    async def reminder_loop(self):
+        """Background task checking scheduled event reminders, auto-start, and auto-end every 60s"""
+        try:
+            now_utc = datetime.now(timezone.utc)
+            async with async_session() as session:
+                result = await session.execute(
+                    select(ScheduledEvent).where(
+                        ScheduledEvent.is_active == True,  # noqa: E712
+                    )
+                )
+                active_events = result.scalars().all()
+
+                for ev in active_events:
+                    expiry_time = ev.end_time or (ev.start_time + timedelta(hours=2))
+
+                    # Get Discord guild and ScheduledEvent object
+                    guild = self.bot.get_guild(ev.guild_id) or (
+                        self.bot.guilds[0] if self.bot.guilds else None
+                    )
+                    discord_event = None
+                    if guild:
+                        discord_event = guild.get_scheduled_event(ev.id)
+                        if not discord_event:
+                            try:
+                                discord_event = await guild.fetch_scheduled_event(ev.id)
+                            except Exception:
+                                discord_event = None
+
+                    # 1. AUTO-END: Check if event has ended
+                    if now_utc >= expiry_time:
+                        if discord_event and discord_event.status in (
+                            discord.EventStatus.active,
+                            discord.EventStatus.scheduled,
+                        ):
+                            try:
+                                await discord_event.end()
+                                logger.info(
+                                    f"Auto-ended scheduled event {ev.id} ({ev.name})"
+                                )
+                            except Exception as end_err:
+                                logger.warning(
+                                    f"Could not auto-end discord event {ev.id}: {end_err}"
+                                )
+
+                            # Broadcast completion message
+                            channel = self.bot.get_channel(ev.broadcast_channel_id)
+                            if channel:
+                                comp_ctx = {
+                                    "event": {
+                                        "name": ev.name,
+                                        "location": ev.location,
+                                        "event_url": ev.event_url,
+                                    },
+                                    "role_mention": f"<@&{ev.target_role_id}>"
+                                    if ev.target_role_id
+                                    else None,
+                                }
+                                try:
+                                    comp_text = render_event_template(
+                                        "events/broadcast_completed.j2", comp_ctx
+                                    )
+                                    await channel.send(comp_text)
+                                except Exception as comp_err:
+                                    logger.error(
+                                        f"Failed to send completion broadcast: {comp_err}"
+                                    )
+
+                        ev.is_active = False
+                        continue
+
+                    # 2. AUTO-START: Check if event start time has arrived
+                    if (
+                        discord_event
+                        and discord_event.status == discord.EventStatus.scheduled
+                        and now_utc >= ev.start_time
+                    ):
+                        if discord_event.channel:
+                            try:
+                                await discord_event.start()
+                                logger.info(
+                                    f"Auto-started scheduled event {ev.id} ({ev.name})"
+                                )
+                                # Broadcast started message
+                                channel = self.bot.get_channel(ev.broadcast_channel_id)
+                                if channel:
+                                    start_ctx = {
+                                        "event": {
+                                            "name": ev.name,
+                                            "location": ev.location,
+                                            "event_url": ev.event_url,
+                                        },
+                                        "role_mention": f"<@&{ev.target_role_id}>"
+                                        if ev.target_role_id
+                                        else None,
+                                    }
+                                    try:
+                                        start_text = render_event_template(
+                                            "events/broadcast_started.j2",
+                                            start_ctx,
+                                        )
+                                        await channel.send(start_text)
+                                    except Exception as start_err:
+                                        logger.error(
+                                            f"Failed to send started broadcast: {start_err}"
+                                        )
+                            except Exception as start_api_err:
+                                logger.warning(
+                                    f"Could not auto-start discord event {ev.id}: {start_api_err}"
+                                )
+
+                    # 3. MULTI-INTERVAL REMINDERS: Check due reminder intervals
+                    intervals = ev.reminder_intervals or []
+                    sent = list(ev.reminders_sent or [])
+                    dirty = False
+
+                    for interval in intervals:
+                        if interval in sent:
+                            continue
+                        trigger_time = ev.start_time - timedelta(minutes=interval)
+                        if now_utc >= trigger_time:
+                            channel = self.bot.get_channel(ev.broadcast_channel_id)
+                            if not channel:
+                                try:
+                                    channel = await self.bot.fetch_channel(
+                                        ev.broadcast_channel_id
+                                    )
+                                except Exception:
+                                    channel = None
+
+                            if channel:
+                                time_label = get_human_time_label(interval)
+                                ctx = {
+                                    "event": {
+                                        "name": ev.name,
+                                        "description": ev.description or "",
+                                        "location": ev.location,
+                                        "event_url": ev.event_url,
+                                    },
+                                    "time_label": time_label,
+                                    "formatted_time": format_time_wib(ev.start_time),
+                                    "role_mention": f"<@&{ev.target_role_id}>"
+                                    if ev.target_role_id
+                                    else None,
+                                }
+                                try:
+                                    reminder_text = render_event_template(
+                                        ev.template_name
+                                        or "events/default_reminder.j2",
+                                        ctx,
+                                    )
+                                    await channel.send(reminder_text)
+                                except Exception as send_err:
+                                    logger.error(
+                                        f"Failed to send reminder for event {ev.id}: {send_err}"
+                                    )
+
+                            sent.append(interval)
+                            dirty = True
+
+                    if dirty:
+                        ev.reminders_sent = sent
+                        flag_modified(ev, "reminders_sent")
+
+                await session.commit()
+        except Exception as e:
+            logger.error(f"Error in reminder_loop: {e}")
+
+    @reminder_loop.before_loop
+    async def before_reminder_loop(self):
+        await self.bot.wait_until_ready()
+
+    @commands.Cog.listener()
+    async def on_scheduled_event_update(
+        self, before: discord.ScheduledEvent, after: discord.ScheduledEvent
+    ):
+        """Gateway listener to sync event updates (anti data-drift)"""
+        try:
+            async with async_session() as session:
+                result = await session.execute(
+                    select(ScheduledEvent).where(ScheduledEvent.id == after.id)
+                )
+                db_event = result.scalar_one_or_none()
+                if not db_event:
+                    return
+
+                if after.status in (
+                    discord.EventStatus.completed,
+                    discord.EventStatus.cancelled,
+                ):
+                    db_event.is_active = False
+                else:
+                    db_event.name = after.name
+                    db_event.description = after.description
+                    if after.location:
+                        db_event.location = after.location
+                    elif after.channel:
+                        db_event.location = after.channel.name
+
+                    if after.start_time and after.start_time != db_event.start_time:
+                        db_event.start_time = after.start_time
+                        # Re-prune intervals for updated start time
+                        db_event.reminder_intervals = prune_reminder_intervals(
+                            after.start_time
+                        )
+                        # Reset sent reminders whose triggers are now in the future
+                        now_utc = datetime.now(timezone.utc)
+                        db_event.reminders_sent = [
+                            i
+                            for i in (db_event.reminders_sent or [])
+                            if now_utc >= (after.start_time - timedelta(minutes=i))
+                        ]
+                        flag_modified(db_event, "reminder_intervals")
+                        flag_modified(db_event, "reminders_sent")
+
+                    if after.end_time:
+                        db_event.end_time = after.end_time
+
+                await session.commit()
+        except Exception as e:
+            logger.error(f"Error handling scheduled event update: {e}")
+
+    @commands.Cog.listener()
+    async def on_scheduled_event_delete(self, event: discord.ScheduledEvent):
+        """Gateway listener to stop reminders when an event is deleted"""
+        try:
+            async with async_session() as session:
+                result = await session.execute(
+                    select(ScheduledEvent).where(ScheduledEvent.id == event.id)
+                )
+                db_event = result.scalar_one_or_none()
+                if db_event:
+                    db_event.is_active = False
+                    await session.commit()
+        except Exception as e:
+            logger.error(f"Error handling scheduled event delete: {e}")
 
 
 async def setup(bot):

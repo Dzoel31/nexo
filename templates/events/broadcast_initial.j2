@@ -1,0 +1,11 @@
+{% if role_mention %}{{ role_mention }} {% endif %}📢 **PENGUMUMAN ACARA BARU**
+
+**{{ event.name }}**
+{{ event.description }}
+
+🗓️ **Jadwal:** {{ formatted_date }}
+⏰ **Waktu:** {{ formatted_time }} WIB
+📍 **Lokasi:** {{ event.location }}
+
+Klik card event di bawah untuk menandai kehadiran kamu! 👇
+{{ event.event_url }}
