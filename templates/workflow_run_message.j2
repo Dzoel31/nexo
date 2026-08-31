@@ -32,7 +32,7 @@
       ],
       "thumbnail": {"url": "{{ data.workflow_run.triggering_actor.avatar_url }}?s=64"},
       "footer": {
-        "text": "Time: {{ data.workflow_run.updated_at | default('Unknown') }}"
+        "text": "Workflow notification"
       },
       "timestamp": "{{ data.workflow_run.updated_at | default('') }}"
     }
