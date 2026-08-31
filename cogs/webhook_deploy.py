@@ -315,7 +315,7 @@ class WebhookDeployCog(commands.Cog):
                         payload = {
                             "content": (
                                 f"🚀 **Portainer Redeploy Triggered for {target_display}**\n"
-                                f"Webhook Portainer berhasil ditembak (Status `{resp.status}`). Kontainer sedang di-update..."
+                                f"Webhook Portainer berhasil dipicu. Kontainer sedang di-update..."
                             )
                         }
                         await self.send_discord_notification(

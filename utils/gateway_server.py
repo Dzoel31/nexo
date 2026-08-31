@@ -1,12 +1,13 @@
 import os
 import json
+import html
 import logging
 from pathlib import Path
 from typing import Any
 import asyncio
 import uvicorn
 from fastapi import FastAPI, Request, HTTPException
-from jinja2 import Environment, FileSystemLoader, select_autoescape
+from jinja2 import Environment, FileSystemLoader
 from discord.ext import commands
 
 from utils.verify import verify_signature
@@ -31,8 +32,9 @@ if not TEMPLATES_DIR.exists():
     TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
 env_template = Environment(
     loader=FileSystemLoader(str(TEMPLATES_DIR)),
-    autoescape=select_autoescape(["j2", "html", "xml"]),
+    autoescape=False,
 )
+env_template.filters["unescape"] = html.unescape
 
 
 def load_projects_config() -> dict[str, Any]:
@@ -227,10 +229,18 @@ async def webhook_handler(request: Request):
                 elif any(
                     k in wf_name
                     for k in [
-                        "release",
-                        "cd",
-                        "deploy",
+                        "build & push",
+                        "build and push",
                         "docker",
+                        "publish image",
+                        "deploy",
+                    ]
+                ) and not any(
+                    k in wf_name
+                    for k in [
+                        "ci (lint & format)",
+                        "ci",
+                        "continuous integration",
                         "continuous delivery",
                     ]
                 ):
@@ -239,7 +249,8 @@ async def webhook_handler(request: Request):
             "published",
             "released",
         ):
-            is_cd_success = True
+            # For releases, announce the release notes without triggering premature redeploy
+            template_name = "release_message.j2"
 
         if is_docs_update:
             template_name = "announce_docs.j2"

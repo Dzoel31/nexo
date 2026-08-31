@@ -5,11 +5,14 @@
       "title": "{{ config.emoji }} {{ config.title }} di {{ data.repository.full_name }}",
       "url": "{{ data.release.html_url if data.release and data.release.html_url else (data.workflow_run.html_url if data.workflow_run and data.workflow_run.html_url else data.repository.html_url) }}",
       "color": 3066993,
-      "description": "Layanan **{{ data.repository.name }}** telah berhasil di-deploy di VPS melalui **{{ data.release.tag_name if data.release and data.release.tag_name else (data.workflow_run.name if data.workflow_run else 'Continuous Delivery') }}**.\n{% if data.release and data.release.body %}\n\n**Release Notes / Catatan Perubahan:**\n```markdown\n{{ data.release.body }}\n```{% endif %}",
+      "description": "Layanan **{{ data.repository.name }}** telah berhasil di-deploy di VPS melalui **{{ data.release.tag_name if data.release and data.release.tag_name else (data.workflow_run.name if data.workflow_run else 'Continuous Delivery') }}**.{% if data.release and data.release.body %}\n\n**📝 Catatan Perubahan (Release Notes):**\n```markdown\n{{ data.release.body | replace('\r', '') | replace('\n\n', '\n') | replace('\"', '\\\"') | truncate(1000) }}\n```{% elif data.workflow_run and data.workflow_run.head_commit and data.workflow_run.head_commit.message %}\n\n**📝 Perubahan yang Di-deploy:**\n```\n{{ data.workflow_run.head_commit.message | replace('\r', '') | replace('\n\n', '\n') | replace('\"', '\\\"') | truncate(1000) }}\n```{% elif data.workflow_run and data.workflow_run.display_title %}\n\n**📝 Perubahan:** `{{ data.workflow_run.display_title | replace('\"', '\\\"') }}`{% endif %}",
       "fields": [
         {"name": "Repo", "value": "{{ data.repository.full_name }}", "inline": true},
         {"name": "Triggered By", "value": "{{ data.release.author.login if data.release and data.release.author else (data.workflow_run.triggering_actor.login if data.workflow_run and data.workflow_run.triggering_actor else (data.sender.login if data.sender else 'System')) }}", "inline": true},
-        {"name": "Status", "value": "✅ Sukses (VPS Deployed)", "inline": true}
+        {"name": "Status", "value": "✅ Sukses (VPS Deployed)", "inline": true}{% if data.workflow_run and data.workflow_run.head_branch %},
+        {"name": "Branch / Tag", "value": "`{{ data.workflow_run.head_branch }}`", "inline": true}{% elif data.release and data.release.tag_name %},
+        {"name": "Branch / Tag", "value": "`{{ data.release.tag_name }}`", "inline": true}{% endif %}{% if data.workflow_run and data.workflow_run.head_sha %},
+        {"name": "Commit SHA", "value": "`{{ data.workflow_run.head_sha[:7] }}`", "inline": true}{% endif %}
       ],
       "footer": {
         "text": "Nexo CD Pipeline Service • KSM AIoT"
