@@ -22,11 +22,12 @@ LLAMA_TOKENIZE_URL = os.environ.get(
     LLAMA_SERVER_URL.replace("/v1/chat/completions", "/tokenize"),
 )
 
-TOTAL_CONTEXT_WINDOW = 8192
-# Ambang batas pemicu perangkuman: jika total token pesan >= 6,144 (75% context window)
-COMPACTION_THRESHOLD = int(TOTAL_CONTEXT_WINDOW * 0.75)  # 6144 token
+TOTAL_CONTEXT_WINDOW = 8448
+# Base overhead (System prompt + Sanitized tools) is ~1,400 tokens.
+# Ambang batas pemicu perangkuman riwayat pesan: 4,500 token (Total payload aman <= 6,500 < 8,448)
+COMPACTION_THRESHOLD = 4500
 # Target sisa token riwayat aktif yang dipertahankan setelah perangkuman
-TARGET_RETAIN_TOKENS = int(TOTAL_CONTEXT_WINDOW * 0.30)  # 2457 token
+TARGET_RETAIN_TOKENS = 1800
 
 
 async def count_token(
