@@ -2,6 +2,7 @@ import discord
 import logging
 from discord import app_commands
 from discord.ext import commands
+from db.repository import reset_conversation_history
 from utils.mcp_client import (
     LLAMA_BASE_URL,
     MCP_SERVER_URL,
@@ -147,12 +148,26 @@ class HelpView(discord.ui.View):
             )
             await self.fetch_mcp_tools_live()
 
+            def _clean_desc(raw_desc: str, max_len: int = 70) -> str:
+                if not raw_desc:
+                    return "Tidak ada deskripsi."
+                first_line = (
+                    raw_desc.strip()
+                    .split("\n")[0]
+                    .split("Args:")[0]
+                    .strip()
+                    .rstrip(".")
+                )
+                if len(first_line) > max_len:
+                    return first_line[: max_len - 3] + "..."
+                return first_line
+
             # 1. Local Tools
             local_tools = getattr(self.bot, "ai_tools", [])
             if local_tools:
                 local_text = "\n".join(
                     [
-                        f"• `{t.get('function', {}).get('name', 'Unknown')}`: {t.get('function', {}).get('description', 'Local Discord tool')}"
+                        f"• `{t.get('function', {}).get('name', 'Unknown')}` : {_clean_desc(t.get('function', {}).get('description', 'Local Discord tool'))}"
                         for t in local_tools
                     ]
                 )
@@ -169,11 +184,10 @@ class HelpView(discord.ui.View):
             # 2. Live MCP Tools
             mcp_tools = getattr(self.bot, "cached_mcp_tools", [])
             if mcp_tools:
-                mcp_lines = []
-                for t in mcp_tools:
-                    fname = t.get("function", {}).get("name", "Unknown")
-                    fdesc = t.get("function", {}).get("description", "No description")
-                    mcp_lines.append(f"• `{fname}`: {fdesc}")
+                mcp_lines = [
+                    f"• `{t.get('function', {}).get('name', 'Unknown')}` : {_clean_desc(t.get('function', {}).get('description', 'No description'))}"
+                    for t in mcp_tools
+                ]
                 mcp_text = "\n".join(mcp_lines)
                 if len(mcp_text) > 1024:
                     mcp_text = mcp_text[:1020] + "..."
@@ -198,7 +212,7 @@ class HelpView(discord.ui.View):
             embed.add_field(
                 name="FastAPI Webhook Gateway",
                 value=(
-                    "• **Endpoint:** `/webhook` | `/api/v1/webhook` | `/nexo/webhook`\n"
+                    "• **Endpoint:** `/nexo/webhook`\n"
                     "• **Authentication:** HMAC SHA-256 (`X-Hub-Signature-256`)\n"
                     "• **Routing:** Dikirim otomatis ke Channel Tim sesuai `projects.json`"
                 ),
@@ -382,6 +396,7 @@ class CoreCommands(commands.Cog):
                 self.bot.conversation_history.clear()
             msg = "Global AI conversation memory context has been cleared for all users! 🧹✨"
         else:
+            await reset_conversation_history(ctx.author.id)
             if hasattr(self.bot, "conversation_history"):
                 self.bot.conversation_history.pop(ctx.author.id, None)
             msg = f"AI conversation memory context cleared for <@{ctx.author.id}>! 🧹✨"
@@ -398,6 +413,7 @@ class CoreCommands(commands.Cog):
     )
     async def reset_slash(self, interaction: discord.Interaction):
         user_id = interaction.user.id
+        await reset_conversation_history(user_id)
         if hasattr(self.bot, "conversation_history"):
             self.bot.conversation_history.pop(user_id, None)
 
@@ -431,10 +447,10 @@ class CoreCommands(commands.Cog):
         if not target_vc:
             if channel_name:
                 return await ctx.send(
-                    f"❌ Voice Channel containing '{channel_name}' was not found."
+                    f"Voice Channel containing '{channel_name}' was not found."
                 )
             return await ctx.send(
-                "❌ Please specify a voice channel name, join a voice channel, or run this command inside a voice channel text chat."
+                "Please specify a voice channel name, join a voice channel, or run this command inside a voice channel text chat."
             )
 
         members = target_vc.members
@@ -444,7 +460,7 @@ class CoreCommands(commands.Cog):
         )
 
         if not members:
-            embed.description = "ℹ️ Currently, there is no one in this Voice Channel."
+            embed.description = "Currently, there is no one in this Voice Channel."
         else:
             member_list = [f"• {m.mention} ({m.display_name})" for m in members]
             embed.description = f"**Total Members:** {len(members)}\n\n" + "\n".join(
@@ -481,10 +497,10 @@ class CoreCommands(commands.Cog):
         if not target_vc:
             if channel_name:
                 return await interaction.response.send_message(
-                    f"❌ Voice Channel containing '{channel_name}' was not found."
+                    f"Voice Channel containing '{channel_name}' was not found."
                 )
             return await interaction.response.send_message(
-                "❌ Please specify a voice channel name, join a voice channel, or run this command inside a voice channel text chat."
+                "Please specify a voice channel name, join a voice channel, or run this command inside a voice channel text chat."
             )
 
         members = target_vc.members
@@ -494,7 +510,7 @@ class CoreCommands(commands.Cog):
         )
 
         if not members:
-            embed.description = "ℹ️ Currently, there is no one in this Voice Channel."
+            embed.description = "Currently, there is no one in this Voice Channel."
         else:
             member_list = [f"• {m.mention} ({m.display_name})" for m in members]
             embed.description = f"**Total Members:** {len(members)}\n\n" + "\n".join(

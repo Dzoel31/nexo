@@ -11,6 +11,7 @@ from utils.schemas import (
     DiscordEventSchema,
     DiscordThreadSchema,
     DiscordPollSchema,
+    EndDiscordPollSchema,
     GetServerChannelsSchema,
     GetServerRolesSchema,
     ClearMessagesSchema,
@@ -40,6 +41,7 @@ class ServerEvents(commands.Cog):
                 "create_discord_event",
                 "create_discord_thread",
                 "create_discord_poll",
+                "end_discord_poll",
                 "get_server_channels",
                 "get_server_roles",
                 "clear_messages",
@@ -85,6 +87,18 @@ class ServerEvents(commands.Cog):
             }
         )
         self.bot.local_tool_handlers["create_discord_poll"] = self.create_poll_handler
+
+        self.bot.ai_tools.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": "end_discord_poll",
+                    "description": "End, close, or stop an active Discord Poll in the current channel and retrieve the final voting results.",
+                    "parameters": EndDiscordPollSchema.model_json_schema(),
+                },
+            }
+        )
+        self.bot.local_tool_handlers["end_discord_poll"] = self.end_poll_handler
 
         self.bot.ai_tools.append(
             {
@@ -248,6 +262,51 @@ class ServerEvents(commands.Cog):
         except Exception as e:
             return f"❌ Failed to create poll. Error: {str(e)}"
 
+    async def end_poll_handler(self, arguments: dict, ctx_obj=None):
+        try:
+            if not ctx_obj:
+                return "❌ Failed to end poll: ctx_obj not found."
+
+            schema = EndDiscordPollSchema.model_validate(arguments)
+            channel = ctx_obj.channel
+
+            target_msg = None
+            if schema.message_id:
+                try:
+                    target_msg = await channel.fetch_message(schema.message_id)
+                except discord.NotFound:
+                    return f"❌ Message with ID {schema.message_id} was not found in this channel."
+            else:
+                # Search recent messages for an active poll
+                async for msg in channel.history(limit=50):
+                    if msg.poll and not msg.poll.is_finalised():
+                        target_msg = msg
+                        break
+
+            if not target_msg or not target_msg.poll:
+                return "❌ No active poll found in this channel to end. If you have the specific message ID, please specify it."
+
+            if target_msg.poll.is_finalised():
+                return f"ℹ️ The poll '{target_msg.poll.question}' has already been closed/finalized."
+
+            # End the poll early
+            ended_msg = await target_msg.end_poll()
+            poll = ended_msg.poll or target_msg.poll
+
+            result_lines = []
+            for ans in poll.answers:
+                result_lines.append(f"• **{ans.text}**: {ans.vote_count} votes")
+
+            results_str = "\n".join(result_lines)
+            return (
+                f"✅ Successfully ended the poll: **'{poll.question}'**\n\n"
+                f"📊 **Final Results:**\n{results_str}"
+            )
+        except discord.Forbidden:
+            return "❌ I don't have permission to end this poll (requires 'Manage Messages' permission or bot must be the creator)."
+        except Exception as e:
+            return f"❌ Failed to end poll. Error: {str(e)}"
+
     async def check_voice_channel_handler(self, arguments: dict, ctx_obj=None) -> str:
         try:
             schema = CheckVoiceChannelSchema.model_validate(arguments)
@@ -387,7 +446,7 @@ class ServerEvents(commands.Cog):
         if channel:
             welcome_msg = (
                 f"Welcome {member.mention} to the AIoT server! 👋\n"
-                f"Please introduce yourself using the following format:\n\n"
+                f"To get more access, please introduce yourself using the following format:\n\n"
                 f"Name:\n"
                 f"Nickname:\n"
                 f"Batch/Year:\n"

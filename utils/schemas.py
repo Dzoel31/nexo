@@ -45,6 +45,13 @@ class DiscordPollSchema(BaseModel):
     )
 
 
+class EndDiscordPollSchema(BaseModel):
+    message_id: Optional[int] = Field(
+        default=None,
+        description="The ID of the message containing the poll to end. If not provided, the bot will automatically search for the latest active poll in the current channel.",
+    )
+
+
 class GetServerChannelsSchema(BaseModel):
     pass
 

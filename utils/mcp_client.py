@@ -1,3 +1,4 @@
+import asyncio
 import os
 import json
 import logging
@@ -8,6 +9,13 @@ import discord
 from mcp import ClientSession
 from mcp.client.sse import sse_client
 from openai import AsyncOpenAI
+from db.repository import (
+    get_or_create_conversation,
+    get_conversation_context,
+    save_message,
+    check_and_trigger_rolling_summary,
+    MessageRole,
+)
 
 logger = logging.getLogger("mcp_client")
 
@@ -188,13 +196,28 @@ async def process_with_mcp_tools(
     Process a user question with MCP tool support and context memory.
     Returns (reply_text, used_tools_boolean)
     """
-    if user_id not in bot.conversation_history:
-        bot.conversation_history[user_id] = []
+    channel_id = (
+        getattr(ctx_obj.channel, "id", None)
+        if ctx_obj and hasattr(ctx_obj, "channel")
+        else None
+    )
+    conv = await get_or_create_conversation(user_id, channel_id)
+
+    summary, recent_messages = await get_conversation_context(user_id)
 
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
     ]
-    messages.extend(bot.conversation_history.get(user_id, []))
+
+    if summary:
+        messages.append(
+            {
+                "role": "system",
+                "content": f"<past_conversation_summary>\n{summary}\n</past_conversation_summary>",
+            }
+        )
+
+    messages.extend(recent_messages)
 
     current_time_str = datetime.now().strftime("%A, %d %B %Y - %H:%M WIB")
 
@@ -325,18 +348,12 @@ async def process_with_mcp_tools(
                 reply = message.content or "I don't have a response."
 
                 # Update conversation history cleanly
-                bot.conversation_history[user_id].append(
-                    {"role": "user", "content": user_question}
-                )
-                bot.conversation_history[user_id].append(
-                    {"role": "assistant", "content": reply}
-                )
+                await save_message(conv.id, MessageRole.USER, user_question)
+                await save_message(conv.id, MessageRole.ASSISTANT, reply)
 
-                if len(bot.conversation_history[user_id]) > MAX_HISTORY_TURNS * 2:
-                    bot.conversation_history[user_id] = bot.conversation_history[
-                        user_id
-                    ][-MAX_HISTORY_TURNS * 2 :]
-
+                asyncio.create_task(
+                    check_and_trigger_rolling_summary(user_id, ai_client)
+                )
                 return reply, used_tools
 
         except Exception as e:
