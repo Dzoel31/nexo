@@ -4,13 +4,13 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import logging
 import os
+import uuid
 from uuid import UUID
 
 import aiohttp
-from sqlalchemy import delete, func, select
-from sqlalchemy.orm import selectinload
+from sqlalchemy import text
 
-from db.models import Conversation, Message, MessageRole, TokenUsageLog
+from db.models import Conversation, MessageRole
 from db.schemas import LLMMessagePayload, MessageCreate, MessageRead
 from db.session import async_session
 
@@ -66,7 +66,7 @@ async def close_http_session() -> None:
 
 
 async def count_token(
-    text: str, session_http: aiohttp.ClientSession | None = None
+    text_content: str, session_http: aiohttp.ClientSession | None = None
 ) -> int:
     """
     True LRU token caching for llama.cpp /tokenize endpoint:
@@ -77,10 +77,12 @@ async def count_token(
     5. Falls back to estimation max(1, len(text) // 4) on failure.
     6. Evicts oldest item popitem(last=False) when cache exceeds 1000 entries.
     """
-    if not text:
+    if not text_content:
         return 0
 
-    text_hash = hashlib.md5(text.encode("utf-8"), usedforsecurity=False).hexdigest()
+    text_hash = hashlib.md5(
+        text_content.encode("utf-8"), usedforsecurity=False
+    ).hexdigest()
 
     # 1. Cache Hit
     if text_hash in _TOKEN_CACHE:
@@ -99,16 +101,18 @@ async def count_token(
     token_count = 0
     try:
         sess = session_http if session_http is not None else await get_http_session()
-        async with sess.post(LLAMA_TOKENIZE_URL, json={"content": text}) as response:
+        async with sess.post(
+            LLAMA_TOKENIZE_URL, json={"content": text_content}
+        ) as response:
             if response.status == 200:
                 data = await response.json()
                 tokens = data.get("tokens", [])
                 token_count = len(tokens)
             else:
-                token_count = max(1, len(text) // 4)
+                token_count = max(1, len(text_content) // 4)
     except Exception:
         # Fallback estimation if tokenize endpoint offline or fails
-        token_count = max(1, len(text) // 4)
+        token_count = max(1, len(text_content) // 4)
     finally:
         if not future.done():
             future.set_result(token_count)
@@ -122,68 +126,121 @@ async def count_token(
     return token_count
 
 
+# ---------------------------------------------------------
+# RAW SQL CONVERSATION & CONTEXT REPOSITORY FUNCTIONS
+# ---------------------------------------------------------
 async def get_or_create_conversation(
     user_id: int, channel_id: int | None = None
 ) -> Conversation:
     """
-    Getting an active conversation based on user_id or creating a new one.
+    Getting an active conversation based on user_id or creating a new one using raw SQL.
     Implements 24-hour sliding TTL expiration for inactive conversations.
     """
     now_utc = datetime.now(timezone.utc)
     async with async_session() as session:
-        stmt = (
-            select(Conversation)
-            .filter_by(user_id=user_id)
-            .options(selectinload(Conversation.messages))
-        )
-        result = await session.execute(stmt)
-        conversation = result.scalars().first()
+        select_sql = text("""
+            SELECT id, user_id, channel_id, summary, created_at, updated_at
+            FROM conversations
+            WHERE user_id = :user_id
+            LIMIT 1
+        """)
+        result = await session.execute(select_sql, {"user_id": user_id})
+        row = result.mappings().first()
 
-        if not conversation:
-            conversation = Conversation(
-                user_id=user_id,
-                channel_id=channel_id,
-                created_at=now_utc,
-                updated_at=now_utc,
+        if not row:
+            new_id = uuid.uuid4()
+            insert_sql = text("""
+                INSERT INTO conversations (id, user_id, channel_id, created_at, updated_at)
+                VALUES (:id, :user_id, :channel_id, :now_utc, :now_utc)
+                RETURNING id, user_id, channel_id, summary, created_at, updated_at
+            """)
+            res = await session.execute(
+                insert_sql,
+                {
+                    "id": new_id,
+                    "user_id": user_id,
+                    "channel_id": channel_id,
+                    "now_utc": now_utc,
+                },
             )
-            session.add(conversation)
             await session.commit()
-            await session.refresh(conversation)
+            created_row = res.mappings().first()
             logger.info(
-                f"Created new conversation for user {user_id} (ID: {conversation.id})"
+                f"Created new conversation for user {user_id} (ID: {created_row['id']})"
             )
-            return conversation
+            conv = Conversation(
+                id=created_row["id"],
+                user_id=created_row["user_id"],
+                channel_id=created_row["channel_id"],
+                summary=created_row["summary"],
+                created_at=created_row["created_at"],
+                updated_at=created_row["updated_at"],
+            )
+            conv.messages = []
+            return conv
 
-        # Check 24-hour sliding TTL
-        last_activity = conversation.updated_at
+        conv_id = row["id"]
+        last_activity = row["updated_at"]
         if last_activity:
             if last_activity.tzinfo is None:
                 last_activity = last_activity.replace(tzinfo=timezone.utc)
 
             if (now_utc - last_activity) >= CONVERSATION_TTL:
                 logger.info(
-                    f"Conversation {conversation.id} for user {user_id} expired after 24h inactivity. "
+                    f"Conversation {conv_id} for user {user_id} expired after 24h inactivity. "
                     "Silently clearing history and resetting token counter."
                 )
                 await session.execute(
-                    delete(Message).where(Message.conversation_id == conversation.id)
+                    text("DELETE FROM messages WHERE conversation_id = :conv_id"),
+                    {"conv_id": conv_id},
                 )
-                conversation.summary = None
-                conversation.messages = []
-                conversation.updated_at = now_utc
-                if channel_id:
-                    conversation.channel_id = channel_id
+                await session.execute(
+                    text("""
+                        UPDATE conversations 
+                        SET summary = NULL, updated_at = :now_utc, channel_id = COALESCE(:channel_id, channel_id)
+                        WHERE id = :conv_id
+                    """),
+                    {
+                        "now_utc": now_utc,
+                        "channel_id": channel_id,
+                        "conv_id": conv_id,
+                    },
+                )
                 await session.commit()
-                await session.refresh(conversation)
-                return conversation
+                conv = Conversation(
+                    id=conv_id,
+                    user_id=row["user_id"],
+                    channel_id=channel_id or row["channel_id"],
+                    summary=None,
+                    created_at=row["created_at"],
+                    updated_at=now_utc,
+                )
+                conv.messages = []
+                return conv
 
-        # Update last activity timestamp on active conversation
-        conversation.updated_at = now_utc
-        if channel_id:
-            conversation.channel_id = channel_id
+        # Active conversation: update last_activity and channel_id
+        await session.execute(
+            text("""
+                UPDATE conversations 
+                SET updated_at = :now_utc, channel_id = COALESCE(:channel_id, channel_id)
+                WHERE id = :conv_id
+            """),
+            {
+                "now_utc": now_utc,
+                "channel_id": channel_id,
+                "conv_id": conv_id,
+            },
+        )
         await session.commit()
-        await session.refresh(conversation)
-        return conversation
+        conv = Conversation(
+            id=conv_id,
+            user_id=row["user_id"],
+            channel_id=channel_id or row["channel_id"],
+            summary=row["summary"],
+            created_at=row["created_at"],
+            updated_at=now_utc,
+        )
+        return conv
 
 
 async def save_message(
@@ -192,59 +249,92 @@ async def save_message(
     content: str,
     token_count: int | None = None,
 ) -> MessageRead:
-    """Validates and saves a new message with incremental token_count and sliding TTL touch to the database."""
+    """Validates and saves a new message with incremental token_count and sliding TTL touch to the database using raw SQL."""
     if token_count is None:
         token_count = await count_token(content)
 
     payload = MessageCreate(role=role, content=content, token_count=token_count)
-
     now_utc = datetime.now(timezone.utc)
-    async with async_session() as session:
-        msg = Message(
-            conversation_id=conversation_id,
-            role=payload.role,
-            content=payload.content,
-            token_count=payload.token_count,
-        )
-        session.add(msg)
+    new_msg_id = uuid.uuid4()
 
-        # Update conversation updated_at for sliding TTL
-        conv_stmt = select(Conversation).filter_by(id=conversation_id)
-        conv_res = await session.execute(conv_stmt)
-        conv = conv_res.scalars().first()
-        if conv:
-            conv.updated_at = now_utc
+    role_val = (
+        payload.role.name
+        if hasattr(payload.role, "name")
+        else str(payload.role).upper()
+    )
+
+    async with async_session() as session:
+        insert_sql = text("""
+            INSERT INTO messages (id, conversation_id, role, content, token_count, created_at)
+            VALUES (:id, :conversation_id, :role, :content, :token_count, :now_utc)
+            RETURNING id, conversation_id, role, content, token_count, created_at
+        """)
+        res = await session.execute(
+            insert_sql,
+            {
+                "id": new_msg_id,
+                "conversation_id": conversation_id,
+                "role": role_val,
+                "content": payload.content,
+                "token_count": payload.token_count,
+                "now_utc": now_utc,
+            },
+        )
+
+        update_conv_sql = text("""
+            UPDATE conversations 
+            SET updated_at = :now_utc 
+            WHERE id = :conversation_id
+        """)
+        await session.execute(
+            update_conv_sql,
+            {"now_utc": now_utc, "conversation_id": conversation_id},
+        )
 
         await session.commit()
-        await session.refresh(msg)
+        msg_row = res.mappings().first()
         logger.info(
             f"Message ({role.value}, {payload.token_count} tok) added to conversation {conversation_id}"
         )
-        return MessageRead.model_validate(msg)
+        saved_role_raw = msg_row["role"]
+        saved_role_enum = (
+            MessageRole[saved_role_raw]
+            if saved_role_raw in MessageRole.__members__
+            else MessageRole(str(saved_role_raw).lower())
+        )
+        return MessageRead(
+            id=msg_row["id"],
+            conversation_id=msg_row["conversation_id"],
+            role=saved_role_enum,
+            content=msg_row["content"],
+            token_count=msg_row["token_count"],
+            created_at=msg_row["created_at"],
+        )
 
 
 async def get_conversation_context(
     user_id: int,
 ) -> tuple[str | None, list[dict], int]:
     """
-    Retrieves conversation context for LLM based on token quota using incremental token counts.
+    Retrieves conversation context for LLM based on token quota using incremental token counts and raw SQL.
     Returns (summary, list_messages_for_llm, total_conversation_tokens).
     """
     now_utc = datetime.now(timezone.utc)
     async with async_session() as session:
-        stmt = (
-            select(Conversation)
-            .filter_by(user_id=user_id)
-            .options(selectinload(Conversation.messages))
-        )
-        result = await session.execute(stmt)
-        conversation = result.scalars().first()
+        conv_sql = text("""
+            SELECT id, summary, updated_at
+            FROM conversations
+            WHERE user_id = :user_id
+            LIMIT 1
+        """)
+        conv_res = await session.execute(conv_sql, {"user_id": user_id})
+        conv_row = conv_res.mappings().first()
 
-        if not conversation:
+        if not conv_row:
             return None, [], 0
 
-        # Check 24-hour sliding TTL
-        last_activity = conversation.updated_at
+        conv_id = conv_row["id"]
+        last_activity = conv_row["updated_at"]
         if last_activity:
             if last_activity.tzinfo is None:
                 last_activity = last_activity.replace(tzinfo=timezone.utc)
@@ -254,36 +344,47 @@ async def get_conversation_context(
                     f"Context expired for user {user_id} after 24h inactivity. Returning empty context."
                 )
                 await session.execute(
-                    delete(Message).where(Message.conversation_id == conversation.id)
+                    text("DELETE FROM messages WHERE conversation_id = :conv_id"),
+                    {"conv_id": conv_id},
                 )
-                conversation.summary = None
-                conversation.messages = []
-                conversation.updated_at = now_utc
+                await session.execute(
+                    text(
+                        "UPDATE conversations SET summary = NULL, updated_at = :now_utc WHERE id = :conv_id"
+                    ),
+                    {"now_utc": now_utc, "conv_id": conv_id},
+                )
                 await session.commit()
                 return None, [], 0
 
-        sorted_messages = sorted(conversation.messages, key=lambda m: m.created_at)
+        msgs_sql = text("""
+            SELECT id, role, content, token_count, created_at
+            FROM messages
+            WHERE conversation_id = :conv_id
+            ORDER BY created_at ASC
+        """)
+        msgs_res = await session.execute(msgs_sql, {"conv_id": conv_id})
+        sorted_messages = msgs_res.mappings().all()
+
+        summary = conv_row["summary"]
         if not sorted_messages:
-            summary_tokens = (
-                await count_token(conversation.summary) if conversation.summary else 0
-            )
-            return conversation.summary, [], summary_tokens
+            summary_tokens = await count_token(summary) if summary else 0
+            return summary, [], summary_tokens
 
         message_payloads: list[dict] = []
         current_tokens = 0
 
         # 1. Summary tokens
-        if conversation.summary:
-            summary_tokens = await count_token(conversation.summary)
+        if summary:
+            summary_tokens = await count_token(summary)
             current_tokens += summary_tokens
 
         # 2. Select messages from newest to oldest within threshold
         recent_selected = []
         for msg in reversed(sorted_messages):
             msg_tok = (
-                msg.token_count
-                if msg.token_count > 0
-                else await count_token(msg.content)
+                msg["token_count"]
+                if msg["token_count"] > 0
+                else await count_token(msg["content"])
             )
             if current_tokens + msg_tok <= COMPACTION_THRESHOLD:
                 recent_selected.append((msg, msg_tok))
@@ -295,16 +396,18 @@ async def get_conversation_context(
         recent_selected.reverse()
 
         for msg, _ in recent_selected:
+            raw_role = msg["role"]
+            role_str = raw_role.value if hasattr(raw_role, "value") else str(raw_role)
             llm_item = LLMMessagePayload(
-                role=msg.role.value,
-                content=msg.content,
+                role=role_str,
+                content=msg["content"],
             )
             message_payloads.append(llm_item.model_dump())
 
         logger.info(
             f"Context loaded for user {user_id}: {len(message_payloads)} messages (~{current_tokens} tokens)"
         )
-        return conversation.summary, message_payloads, current_tokens
+        return summary, message_payloads, current_tokens
 
 
 async def check_and_trigger_rolling_summary(
@@ -314,31 +417,43 @@ async def check_and_trigger_rolling_summary(
     on_compaction_end=None,
 ):
     """
-    Checks total conversation tokens and performs rolling compaction if exceeding COMPACTION_THRESHOLD.
+    Checks total conversation tokens and performs rolling compaction if exceeding COMPACTION_THRESHOLD using raw SQL.
     Supports on_compaction_start and on_compaction_end callbacks for Discord visual indicators.
     """
     async with async_session() as session:
-        stmt = (
-            select(Conversation)
-            .filter_by(user_id=user_id)
-            .options(selectinload(Conversation.messages))
-        )
-        result = await session.execute(stmt)
-        conversation = result.scalars().first()
+        conv_sql = text("""
+            SELECT id, summary
+            FROM conversations
+            WHERE user_id = :user_id
+            LIMIT 1
+        """)
+        conv_res = await session.execute(conv_sql, {"user_id": user_id})
+        conv_row = conv_res.mappings().first()
 
-        if not conversation or not conversation.messages:
+        if not conv_row:
             return
 
-        sorted_messages = sorted(conversation.messages, key=lambda m: m.created_at)
+        conv_id = conv_row["id"]
+        msgs_sql = text("""
+            SELECT id, role, content, token_count, created_at
+            FROM messages
+            WHERE conversation_id = :conv_id
+            ORDER BY created_at ASC
+        """)
+        msgs_res = await session.execute(msgs_sql, {"conv_id": conv_id})
+        sorted_messages = msgs_res.mappings().all()
+
+        if not sorted_messages:
+            return
 
         # Calculate total tokens using stored token counts
         msg_tokens = []
         total_tokens = 0
         for msg in sorted_messages:
             t_count = (
-                msg.token_count
-                if msg.token_count > 0
-                else await count_token(msg.content)
+                msg["token_count"]
+                if msg["token_count"] > 0
+                else await count_token(msg["content"])
             )
             msg_tokens.append((msg, t_count))
             total_tokens += t_count
@@ -372,12 +487,15 @@ async def check_and_trigger_rolling_summary(
                 logger.warning(f"Error in on_compaction_start callback: {cb_err}")
 
         old_dialogue = "\n".join(
-            [f"{m.role.value.upper()}: {m.content}" for m in to_summarize]
+            [
+                f"{(m['role'].value if hasattr(m['role'], 'value') else str(m['role'])).upper()}: {m['content']}"
+                for m in to_summarize
+            ]
         )
 
         previous_summary = (
-            f"Previous summary:\n{conversation.summary}\n\n"
-            if conversation.summary
+            f"Previous summary:\n{conv_row['summary']}\n\n"
+            if conv_row["summary"]
             else ""
         )
 
@@ -408,10 +526,25 @@ async def check_and_trigger_rolling_summary(
             )
             new_summary = response.choices[0].message.content.strip()
 
-            conversation.summary = new_summary
+            to_delete_ids = [m["id"] for m in to_summarize]
+            update_summary_sql = text("""
+                UPDATE conversations
+                SET summary = :summary
+                WHERE id = :conv_id
+            """)
+            await session.execute(
+                update_summary_sql,
+                {"summary": new_summary, "conv_id": conv_id},
+            )
 
-            to_delete_ids = [m.id for m in to_summarize]
-            await session.execute(delete(Message).where(Message.id.in_(to_delete_ids)))
+            delete_msgs_sql = text("""
+                DELETE FROM messages
+                WHERE id = ANY(:delete_ids)
+            """)
+            await session.execute(
+                delete_msgs_sql,
+                {"delete_ids": to_delete_ids},
+            )
 
             await session.commit()
             logger.info(
@@ -432,19 +565,19 @@ async def check_and_trigger_rolling_summary(
 
 
 async def reset_conversation_history(user_id: int):
-    """Deleting entire conversation and user summary (command $reset / /reset)."""
+    """Deleting entire conversation and user summary (command $reset / /reset) using raw SQL."""
     async with async_session() as session:
-        stmt = select(Conversation).filter_by(user_id=user_id)
-        result = await session.execute(stmt)
-        conversation = result.scalars().first()
-        if conversation:
-            await session.delete(conversation)
-            await session.commit()
-            logger.info(f"Reset conversation history for user {user_id}")
+        delete_sql = text("""
+            DELETE FROM conversations
+            WHERE user_id = :user_id
+        """)
+        await session.execute(delete_sql, {"user_id": user_id})
+        await session.commit()
+        logger.info(f"Reset conversation history for user {user_id}")
 
 
 # ---------------------------------------------------------
-# TOKEN USAGE ANALYTICS REPOSITORY FUNCTIONS
+# RAW SQL TOKEN USAGE ANALYTICS FUNCTIONS
 # ---------------------------------------------------------
 async def log_token_usage(
     guild_id: int | None,
@@ -455,44 +588,53 @@ async def log_token_usage(
     total_tokens: int,
     latency_ms: int,
 ) -> None:
-    """Stores token usage and latency asynchronously in PostgreSQL."""
+    """Stores token usage and latency asynchronously in PostgreSQL using raw SQL."""
     try:
+        now_utc = datetime.now(timezone.utc)
         async with async_session() as session:
-            entry = TokenUsageLog(
-                guild_id=guild_id,
-                user_id=user_id,
-                username=username,
-                prompt_tokens=prompt_tokens,
-                completion_tokens=completion_tokens,
-                total_tokens=total_tokens,
-                latency_ms=latency_ms,
+            insert_sql = text("""
+                INSERT INTO token_usage_logs (
+                    guild_id, user_id, username, prompt_tokens, completion_tokens, total_tokens, latency_ms, created_at
+                )
+                VALUES (
+                    :guild_id, :user_id, :username, :prompt_tokens, :completion_tokens, :total_tokens, :latency_ms, :now_utc
+                )
+            """)
+            await session.execute(
+                insert_sql,
+                {
+                    "guild_id": guild_id,
+                    "user_id": user_id,
+                    "username": username,
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": total_tokens,
+                    "latency_ms": latency_ms,
+                    "now_utc": now_utc,
+                },
             )
-            session.add(entry)
             await session.commit()
     except Exception as e:
         logger.error(f"Failed to save token usage log: {e}")
 
 
 async def get_user_token_stats(user_id: int) -> dict:
-    """Aggregates user token statistics directly in SQL."""
+    """Aggregates user token statistics directly in SQL using raw SQL."""
     async with async_session() as session:
-        stmt = select(
-            func.coalesce(func.sum(TokenUsageLog.prompt_tokens), 0).label(
-                "prompt_tokens"
-            ),
-            func.coalesce(func.sum(TokenUsageLog.completion_tokens), 0).label(
-                "completion_tokens"
-            ),
-            func.coalesce(func.sum(TokenUsageLog.total_tokens), 0).label(
-                "total_tokens"
-            ),
-            func.count(TokenUsageLog.id).label("interactions"),
-            func.coalesce(func.max(TokenUsageLog.username), "User").label("username"),
-        ).where(TokenUsageLog.user_id == user_id)
+        stats_sql = text("""
+            SELECT 
+                COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+                COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+                COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                COUNT(id) AS interactions,
+                COALESCE(MAX(username), 'User') AS username
+            FROM token_usage_logs
+            WHERE user_id = :user_id
+        """)
+        result = await session.execute(stats_sql, {"user_id": user_id})
+        row = result.mappings().first()
 
-        result = await session.execute(stmt)
-        row = result.first()
-        if not row or row.interactions == 0:
+        if not row or row["interactions"] == 0:
             return {
                 "user_id": user_id,
                 "username": "User",
@@ -503,15 +645,15 @@ async def get_user_token_stats(user_id: int) -> dict:
                 "avg_tokens_per_interaction": 0.0,
             }
 
-        prompt_tok = int(row.prompt_tokens)
-        comp_tok = int(row.completion_tokens)
-        total_tok = int(row.total_tokens)
-        interactions = int(row.interactions)
+        prompt_tok = int(row["prompt_tokens"])
+        comp_tok = int(row["completion_tokens"])
+        total_tok = int(row["total_tokens"])
+        interactions = int(row["interactions"])
         avg_tok = round(total_tok / interactions, 2) if interactions > 0 else 0.0
 
         return {
             "user_id": user_id,
-            "username": row.username,
+            "username": row["username"],
             "total_prompt_tokens": prompt_tok,
             "total_completion_tokens": comp_tok,
             "total_tokens": total_tok,
@@ -523,67 +665,60 @@ async def get_user_token_stats(user_id: int) -> dict:
 async def get_guild_token_leaderboard(
     guild_id: int, limit: int = 10
 ) -> tuple[list[dict], dict]:
-    """Returns top 10 token consumers in a guild and guild total usage (aggregated in SQL)."""
+    """Returns top 10 token consumers in a guild and guild total usage (aggregated via raw SQL)."""
     async with async_session() as session:
-        # Top 10 users in guild
-        stmt = (
-            select(
-                TokenUsageLog.user_id,
-                func.max(TokenUsageLog.username).label("username"),
-                func.sum(TokenUsageLog.prompt_tokens).label("prompt_tokens"),
-                func.sum(TokenUsageLog.completion_tokens).label("completion_tokens"),
-                func.sum(TokenUsageLog.total_tokens).label("total_tokens"),
-                func.count(TokenUsageLog.id).label("interactions"),
-            )
-            .where(TokenUsageLog.guild_id == guild_id)
-            .group_by(TokenUsageLog.user_id)
-            .order_by(func.sum(TokenUsageLog.total_tokens).desc())
-            .limit(limit)
+        # Top users in guild
+        leaderboard_sql = text("""
+            SELECT 
+                user_id,
+                COALESCE(MAX(username), 'User') AS username,
+                COALESCE(SUM(prompt_tokens), 0) AS prompt_tokens,
+                COALESCE(SUM(completion_tokens), 0) AS completion_tokens,
+                COALESCE(SUM(total_tokens), 0) AS total_tokens,
+                COUNT(id) AS interactions
+            FROM token_usage_logs
+            WHERE guild_id = :guild_id
+            GROUP BY user_id
+            ORDER BY SUM(total_tokens) DESC
+            LIMIT :limit
+        """)
+        result = await session.execute(
+            leaderboard_sql, {"guild_id": guild_id, "limit": limit}
         )
-
-        result = await session.execute(stmt)
-        rows = result.all()
+        rows = result.mappings().all()
         leaderboard = [
             {
-                "user_id": int(r.user_id),
-                "username": r.username,
-                "prompt_tokens": int(r.prompt_tokens or 0),
-                "completion_tokens": int(r.completion_tokens or 0),
-                "total_tokens": int(r.total_tokens or 0),
-                "interactions": int(r.interactions or 0),
+                "user_id": int(r["user_id"]),
+                "username": r["username"],
+                "prompt_tokens": int(r["prompt_tokens"]),
+                "completion_tokens": int(r["completion_tokens"]),
+                "total_tokens": int(r["total_tokens"]),
+                "interactions": int(r["interactions"]),
             }
             for r in rows
         ]
 
         # Guild total aggregates
-        total_stmt = select(
-            func.coalesce(func.sum(TokenUsageLog.prompt_tokens), 0).label(
-                "guild_prompt_tokens"
-            ),
-            func.coalesce(func.sum(TokenUsageLog.completion_tokens), 0).label(
-                "guild_completion_tokens"
-            ),
-            func.coalesce(func.sum(TokenUsageLog.total_tokens), 0).label(
-                "guild_total_tokens"
-            ),
-            func.count(TokenUsageLog.id).label("guild_interactions"),
-        ).where(TokenUsageLog.guild_id == guild_id)
-
-        total_res = await session.execute(total_stmt)
-        tot_row = total_res.first()
+        total_sql = text("""
+            SELECT 
+                COALESCE(SUM(prompt_tokens), 0) AS guild_prompt_tokens,
+                COALESCE(SUM(completion_tokens), 0) AS guild_completion_tokens,
+                COALESCE(SUM(total_tokens), 0) AS guild_total_tokens,
+                COUNT(id) AS guild_interactions
+            FROM token_usage_logs
+            WHERE guild_id = :guild_id
+        """)
+        total_res = await session.execute(total_sql, {"guild_id": guild_id})
+        tot_row = total_res.mappings().first()
         guild_summary = {
-            "guild_prompt_tokens": int(tot_row.guild_prompt_tokens or 0)
+            "guild_prompt_tokens": int(tot_row["guild_prompt_tokens"])
             if tot_row
             else 0,
-            "guild_completion_tokens": int(tot_row.guild_completion_tokens or 0)
+            "guild_completion_tokens": int(tot_row["guild_completion_tokens"])
             if tot_row
             else 0,
-            "guild_total_tokens": int(tot_row.guild_total_tokens or 0)
-            if tot_row
-            else 0,
-            "guild_interactions": int(tot_row.guild_interactions or 0)
-            if tot_row
-            else 0,
+            "guild_total_tokens": int(tot_row["guild_total_tokens"]) if tot_row else 0,
+            "guild_interactions": int(tot_row["guild_interactions"]) if tot_row else 0,
         }
 
         return leaderboard, guild_summary

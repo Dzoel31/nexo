@@ -21,6 +21,9 @@ engine: AsyncEngine = create_async_engine(
     echo=False,  # Set True untuk debug query SQL
     pool_size=10,
     max_overflow=20,
+    pool_pre_ping=True,  # Validasi koneksi sebelum checkout dari pool
+    pool_recycle=1800,  # Daur ulang koneksi setiap 30 menit (1800s)
+    pool_timeout=30.0,  # Mencegah worker hang jika connection pool penuh
 )
 
 async_session = async_sessionmaker(
