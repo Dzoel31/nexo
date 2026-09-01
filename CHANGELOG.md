@@ -2,6 +2,44 @@
 
 <!-- version list -->
 
+## v1.10.0 (2026-09-01)
+
+### Bug Fixes
+
+- **gateway**: Filter duplicate cd triggers and unescape jinja templates
+  ([`98777e3`](https://github.com/ksm-aiot-upnvj/nexo/commit/98777e325a71fe7e8fa944bf38de7eb1b9e533db))
+
+- **orchestrator**: Prevent worker silent death and isolate tool execution errors
+  ([`36ab76d`](https://github.com/ksm-aiot-upnvj/nexo/commit/36ab76df34cd507d3c9344730a5e9255f54c367e))
+
+### Features
+
+- **agent**: Add end_discord_poll tool, integrate db memory, and compact tool menu
+  ([`277cae7`](https://github.com/ksm-aiot-upnvj/nexo/commit/277cae7ed2a59c3876dde1496499505ca3fca9b7))
+
+- **conversation**: Implement 24-hour sliding TTL context expiration and graceful error handling
+  ([`007d2ef`](https://github.com/ksm-aiot-upnvj/nexo/commit/007d2ef8633d62212d59fb8509ec6ee9c639c4ac))
+
+- **db**: Implement async postgresql persistence, alembic migrations, and token compaction
+  ([`4f2d449`](https://github.com/ksm-aiot-upnvj/nexo/commit/4f2d449436dbbe27a83c542b2c7eb90b0fde8cd5))
+
+- **events**: Enforce WIB timezone, role mention footers, and broadcast AllowedMentions
+  ([`4e1223d`](https://github.com/ksm-aiot-upnvj/nexo/commit/4e1223de32a255db4bfd99af9e74bc7eff17b198))
+
+- **events**: Implement persistent discord event lifecycle, auto-reminder scheduler, and
+  auto-management
+  ([`7e00bd2`](https://github.com/ksm-aiot-upnvj/nexo/commit/7e00bd2f2740196619d018947a3af031ea7634f2))
+
+- **tokens**: Implement true LRU token cache, usage analytics, UX feedback, and auto-migration
+  entrypoint
+  ([`1ff5d1a`](https://github.com/ksm-aiot-upnvj/nexo/commit/1ff5d1a3fa5484eadf3d82c34c412961508cc7b1))
+
+### Performance Improvements
+
+- **agent**: Sanitize tool schema and reduce context token footprint
+  ([`1d6ef27`](https://github.com/ksm-aiot-upnvj/nexo/commit/1d6ef275dd33235604c61af6b2544234ed0caf56))
+
+
 ## v1.9.0 (2026-08-29)
 
 ### Features
