@@ -35,6 +35,14 @@ async def on_ready():
         activity=discord.Game(name="Guiding You to the Future 🚀 | $help")
     )
     logger.info(f"Logged in as {bot.user} (ID: {bot.user.id})")
+
+    # Sync application slash commands to Discord
+    try:
+        synced = await bot.tree.sync()
+        logger.info(f"Synced {len(synced)} application slash commands globally.")
+    except Exception as e:
+        logger.error(f"Failed to sync slash commands: {e}")
+
     logger.info("------")
 
 
@@ -52,27 +60,34 @@ async def main():
         logger.error("DISCORD_BOT_TOKEN environment variable not set.")
         return
 
-    # Load all local Cogs
-    cogs_to_load = [
-        "cogs.core_commands",
-        "cogs.agent_orchestrator",
-        "cogs.server_events",
-        "cogs.webhook_deploy",
-    ]
+    from db.repository import close_http_session
 
-    for cog in cogs_to_load:
-        try:
-            await bot.load_extension(cog)
-            logger.info(f"Loaded {cog} successfully")
-        except Exception as e:
-            logger.error(f"Failed to load cog {cog}: {e}")
+    try:
+        # Load all local Cogs
+        cogs_to_load = [
+            "cogs.core_commands",
+            "cogs.agent_orchestrator",
+            "cogs.server_events",
+            "cogs.webhook_deploy",
+        ]
 
-    # Launch FastAPI Webhook Gateway Server in background task
-    from utils.gateway_server import start_gateway_server
+        for cog in cogs_to_load:
+            try:
+                await bot.load_extension(cog)
+                logger.info(f"Loaded {cog} successfully")
+            except Exception as e:
+                logger.error(f"Failed to load cog {cog}: {e}")
 
-    asyncio.create_task(start_gateway_server(bot))
+        # Launch FastAPI Webhook Gateway Server in background task
+        from utils.gateway_server import start_gateway_server
 
-    await bot.start(TOKEN)
+        asyncio.create_task(start_gateway_server(bot))
+
+        await bot.start(TOKEN)
+    finally:
+        await close_http_session()
+        if not bot.is_closed():
+            await bot.close()
 
 
 if __name__ == "__main__":

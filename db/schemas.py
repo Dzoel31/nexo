@@ -15,6 +15,10 @@ class MessageCreate(BaseModel):
         max_length=100_000,
         description="Isi teks konten percakapan",
     )
+    token_count: int = Field(
+        default=0,
+        description="Jumlah token yang dihitung saat pesan dibuat",
+    )
 
 
 class MessageRead(BaseModel):
@@ -26,6 +30,7 @@ class MessageRead(BaseModel):
     conversation_id: UUID
     role: MessageRole
     content: str
+    token_count: int = 0
     created_at: datetime
 
 
@@ -119,3 +124,46 @@ class ScheduledEventRead(BaseModel):
     target_role_id: int | None
     is_active: bool
     created_at: datetime
+
+
+class TokenUsageLogCreate(BaseModel):
+    guild_id: int | None = None
+    user_id: int
+    username: str
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    latency_ms: int = 0
+
+
+class TokenUsageLogRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    guild_id: int | None
+    user_id: int
+    username: str
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    latency_ms: int
+    created_at: datetime
+
+
+class UserTokenStats(BaseModel):
+    user_id: int
+    username: str
+    total_prompt_tokens: int
+    total_completion_tokens: int
+    total_tokens: int
+    interactions: int
+    avg_tokens_per_interaction: float
+
+
+class GuildTokenLeaderboardItem(BaseModel):
+    user_id: int
+    username: str
+    prompt_tokens: int
+    completion_tokens: int
+    total_tokens: int
+    interactions: int

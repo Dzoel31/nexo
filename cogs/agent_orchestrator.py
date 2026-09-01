@@ -1,14 +1,24 @@
-import os
-import discord
-import time
 import asyncio
+import json
 import logging
-from discord.ext import commands
+import os
+import time
+
+import discord
 from discord import app_commands
+from discord.ext import commands
+
+from db.repository import (
+    count_token,
+    get_guild_token_leaderboard,
+    get_user_token_stats,
+)
 from utils.mcp_client import (
-    process_with_mcp_tools,
+    SYSTEM_PROMPT,
     check_services_health,
     get_tools_from_mcp_server,
+    process_with_mcp_tools,
+    sanitize_tools_list,
 )
 
 logger = logging.getLogger("agent_orchestrator")
@@ -25,12 +35,35 @@ class AgentOrchestrator(commands.Cog):
             self.bot.message_queue = asyncio.Queue()
         if not hasattr(self.bot, "bot_lock"):
             self.bot.bot_lock = asyncio.Lock()
+
         # Load tools on startup
         try:
             if not hasattr(self.bot, "cached_mcp_tools"):
                 self.bot.cached_mcp_tools = await get_tools_from_mcp_server()
         except Exception as e:
             logger.warning(f"MCP Server not available on startup: {e}")
+
+        # Pre-calculate static base token overhead once
+        try:
+            all_tools = []
+            if getattr(self.bot, "ai_tools", None):
+                all_tools.extend(self.bot.ai_tools)
+            if getattr(self.bot, "cached_mcp_tools", None):
+                all_tools.extend(self.bot.cached_mcp_tools)
+
+            sanitized = sanitize_tools_list(all_tools) if all_tools else []
+            tools_json_str = json.dumps(sanitized)
+
+            sys_tok = await count_token(SYSTEM_PROMPT)
+            tools_tok = await count_token(tools_json_str)
+            self.bot.base_overhead_tokens = sys_tok + tools_tok
+            logger.info(
+                f"Pre-calculated Base Overhead: {self.bot.base_overhead_tokens} tokens "
+                f"(System: {sys_tok}, Tools: {tools_tok})"
+            )
+        except Exception as e:
+            self.bot.base_overhead_tokens = 1400
+            logger.warning(f"Could not pre-calculate base token overhead: {e}")
 
         # Start worker
         self.worker_task = asyncio.create_task(self.worker())
@@ -43,13 +76,11 @@ class AgentOrchestrator(commands.Cog):
     async def worker(self):
         """Constantly watches the queue and processes requests one by one"""
         while True:
-            # Wait until a request is available
             try:
                 queue_item = await self.bot.message_queue.get()
             except asyncio.CancelledError:
                 break
 
-            # Unpack the queue item
             if len(queue_item) == 3:
                 ctx_obj, prompt, queued_time = queue_item
             else:
@@ -59,6 +90,7 @@ class AgentOrchestrator(commands.Cog):
             is_interaction = isinstance(ctx_obj, discord.Interaction)
             user_id = ctx_obj.user.id if is_interaction else ctx_obj.author.id
             user_name = ctx_obj.user.name if is_interaction else ctx_obj.author.name
+            channel = ctx_obj.channel
 
             async with self.bot.bot_lock:
                 is_expired = (time.time() - queued_time) > 850
@@ -76,86 +108,72 @@ class AgentOrchestrator(commands.Cog):
                         is_expired = True
 
                 try:
-                    reply, used_tools = await process_with_mcp_tools(
-                        self.bot, user_id, user_name, prompt, ctx_obj=ctx_obj
-                    )
+                    # Keep typing indicator active during processing
+                    async with channel.typing():
+                        (
+                            reply,
+                            used_tools,
+                            usage,
+                            elapsed_s,
+                        ) = await process_with_mcp_tools(
+                            self.bot,
+                            user_id,
+                            user_name,
+                            prompt,
+                            ctx_obj=ctx_obj,
+                        )
+
+                    # Build metadata footer
+                    prompt_tok = usage.get("prompt_tokens")
+                    comp_tok = usage.get("completion_tokens")
+                    if prompt_tok is not None and comp_tok is not None:
+                        footer_text = f"⚡ {elapsed_s:.2f}s • In: {prompt_tok:,} tokens • Out: {comp_tok:,} tokens"
+                    else:
+                        footer_text = f"⚡ {elapsed_s:.2f}s • Nexo KSM AIoT"
 
                     if reply:
-                        if used_tools:
-                            safe_reply = reply[:4096]
-                            embed = discord.Embed(
-                                title="✨ Nexo Response",
-                                description=safe_reply,
-                                color=discord.Color.blue(),
+                        safe_reply = reply[:4096]
+                        embed = discord.Embed(
+                            title="✨ Nexo Response",
+                            description=safe_reply,
+                            color=discord.Color.blue(),
+                        )
+                        embed.set_footer(text=footer_text)
+
+                        if is_expired:
+                            await channel.send(
+                                content=f"<@{user_id}> Sorry for the long wait! Here is your response:",
+                                embed=embed,
                             )
-                            embed.set_footer(text="Generated by Nexo KSM AIoT")
-                            if is_expired:
-                                await ctx_obj.channel.send(
-                                    content=f"<@{user_id}> Sorry for the long wait! Here is your response:",
-                                    embed=embed,
+                        else:
+                            if is_interaction:
+                                await ctx_obj.edit_original_response(
+                                    content=None, embed=embed
                                 )
                             else:
-                                if is_interaction:
-                                    await ctx_obj.edit_original_response(
-                                        content=None, embed=embed
-                                    )
-                                else:
+                                if wait_msg:
                                     await wait_msg.edit(content=None, embed=embed)
-                        else:
-                            if is_expired:
-                                if len(reply) > 2000:
-                                    chunks = [
-                                        reply[i : i + 2000]
-                                        for i in range(0, len(reply), 2000)
-                                    ]
-                                    await ctx_obj.channel.send(
-                                        f"<@{user_id}> {chunks[0]}"
+                                else:
+                                    await channel.send(
+                                        content=f"<@{user_id}>", embed=embed
                                     )
-                                    for chunk in chunks[1:]:
-                                        await ctx_obj.channel.send(chunk)
-                                else:
-                                    await ctx_obj.channel.send(f"<@{user_id}> {reply}")
-                            else:
-                                if len(reply) > 2000:
-                                    chunks = [
-                                        reply[i : i + 2000]
-                                        for i in range(0, len(reply), 2000)
-                                    ]
-                                    if is_interaction:
-                                        await ctx_obj.edit_original_response(
-                                            content=chunks[0]
-                                        )
-                                    else:
-                                        await wait_msg.edit(content=chunks[0])
-                                    for chunk in chunks[1:]:
-                                        await ctx_obj.channel.send(chunk)
-                                else:
-                                    if is_interaction:
-                                        await ctx_obj.edit_original_response(
-                                            content=reply
-                                        )
-                                    else:
-                                        await wait_msg.edit(content=reply)
-                        logger.info(f"Sent response (length: {len(reply)} chars)")
-                except discord.NotFound:
-                    # The wait message (wait_msg) might have been deleted by the bot's own action (e.g., clear_messages tool)
-                    # So we just send the reply as a new message without the connection error message.
-                    await ctx_obj.channel.send(f"<@{user_id}> {reply}")
-                except Exception as e:
-                    if is_expired:
-                        await ctx_obj.channel.send(
-                            f"<@{user_id}> Oops, sorry, there was an error while I was thinking: {str(e)} 😭"
+
+                        logger.info(
+                            f"Sent response (length: {len(reply)} chars, {footer_text})"
                         )
+
+                except discord.NotFound:
+                    await channel.send(f"<@{user_id}> {reply}")
+                except Exception as e:
+                    err_text = f"Oops, sorry, there was an error while I was thinking: {str(e)} 😭"
+                    if is_expired:
+                        await channel.send(f"<@{user_id}> {err_text}")
                     else:
                         if is_interaction:
-                            await ctx_obj.edit_original_response(
-                                content=f"Oops, sorry, there was an error while I was thinking: {str(e)} 😭"
-                            )
+                            await ctx_obj.edit_original_response(content=err_text)
                         else:
                             if wait_msg:
-                                await wait_msg.edit(
-                                    content=f"Oops, sorry, there was an error while I was thinking: {str(e)} 😭"
-                                )
+                                await wait_msg.edit(content=err_text)
                 finally:
                     self.bot.message_queue.task_done()
 
@@ -191,68 +209,256 @@ class AgentOrchestrator(commands.Cog):
 
         await self.bot.message_queue.put((interaction, pertanyaan, time.time()))
 
+    @app_commands.command(
+        name="token-stats",
+        description="View your personal token consumption and interaction stats.",
+    )
+    async def token_stats_slash(self, interaction: discord.Interaction):
+        """Displays user's personal token usage analytics."""
+        await interaction.response.defer(ephemeral=False)
+        stats = await get_user_token_stats(interaction.user.id)
+
+        embed = discord.Embed(
+            title=f"📊 Token Usage Statistics — {interaction.user.display_name}",
+            color=discord.Color.teal(),
+        )
+        embed.add_field(
+            name="📥 Prompt Tokens (Input)",
+            value=f"`{stats['total_prompt_tokens']:,}` tokens",
+            inline=True,
+        )
+        embed.add_field(
+            name="📤 Completion Tokens (Output)",
+            value=f"`{stats['total_completion_tokens']:,}` tokens",
+            inline=True,
+        )
+        embed.add_field(
+            name="📈 Total Tokens Used",
+            value=f"`{stats['total_tokens']:,}` tokens",
+            inline=True,
+        )
+        embed.add_field(
+            name="💬 Total Interactions",
+            value=f"`{stats['interactions']:,}` queries",
+            inline=True,
+        )
+        embed.add_field(
+            name="⚡ Avg. Tokens / Turn",
+            value=f"`{stats['avg_tokens_per_interaction']:,}` tokens",
+            inline=True,
+        )
+        embed.set_footer(text="Nexo Token Analytics • PostgreSQL Persistence")
+        await interaction.edit_original_response(embed=embed)
+
+    @commands.command(name="tokenstats", aliases=["tokens", "mytoken"])
+    async def token_stats_prefix(self, ctx):
+        """Prefix command to view user's token statistics."""
+        stats = await get_user_token_stats(ctx.author.id)
+
+        embed = discord.Embed(
+            title=f"📊 Token Usage Statistics — {ctx.author.display_name}",
+            color=discord.Color.teal(),
+        )
+        embed.add_field(
+            name="📥 Prompt Tokens",
+            value=f"`{stats['total_prompt_tokens']:,}`",
+            inline=True,
+        )
+        embed.add_field(
+            name="📤 Completion Tokens",
+            value=f"`{stats['total_completion_tokens']:,}`",
+            inline=True,
+        )
+        embed.add_field(
+            name="📈 Total Tokens",
+            value=f"`{stats['total_tokens']:,}`",
+            inline=True,
+        )
+        embed.add_field(
+            name="💬 Interactions",
+            value=f"`{stats['interactions']:,}`",
+            inline=True,
+        )
+        embed.add_field(
+            name="⚡ Avg. Tokens/Turn",
+            value=f"`{stats['avg_tokens_per_interaction']:,}`",
+            inline=True,
+        )
+        embed.set_footer(text="Nexo Token Analytics • PostgreSQL Persistence")
+        await ctx.reply(embed=embed)
+
+    @app_commands.command(
+        name="leaderboard-token",
+        description="Top 10 token consumers in this Discord server.",
+    )
+    async def leaderboard_token_slash(self, interaction: discord.Interaction):
+        """Displays guild token leaderboard."""
+        if not interaction.guild:
+            await interaction.response.send_message(
+                "❌ This command can only be used in a Discord server.",
+                ephemeral=True,
+            )
+            return
+
+        await interaction.response.defer(ephemeral=False)
+        leaderboard, guild_summary = await get_guild_token_leaderboard(
+            interaction.guild.id, limit=10
+        )
+
+        embed = discord.Embed(
+            title=f"🏆 Token Usage Leaderboard — {interaction.guild.name}",
+            description=(
+                f"**Guild Total Usage:** `{guild_summary['guild_total_tokens']:,}` tokens "
+                f"({guild_summary['guild_interactions']:,} interactions)\n"
+                f"*(Input: `{guild_summary['guild_prompt_tokens']:,}` • Output: `{guild_summary['guild_completion_tokens']:,}`)*\n\n"
+                "**Top 10 Active AI Users:**"
+            ),
+            color=discord.Color.gold(),
+        )
+
+        if not leaderboard:
+            embed.description += (
+                "\n*No token interactions recorded in this server yet.*"
+            )
+        else:
+            rank_medals = ["🥇", "🥈", "🥉"]
+            for idx, item in enumerate(leaderboard, start=1):
+                medal = (
+                    rank_medals[idx - 1] if idx <= len(rank_medals) else f"**#{idx}**"
+                )
+                embed.add_field(
+                    name=f"{medal} {item['username']}",
+                    value=(
+                        f"**Total:** `{item['total_tokens']:,}` tokens\n"
+                        f"*(In: `{item['prompt_tokens']:,}` | Out: `{item['completion_tokens']:,}` | {item['interactions']} chats)*"
+                    ),
+                    inline=False,
+                )
+
+        embed.set_footer(text="Aggregated directly via PostgreSQL Analytics")
+        await interaction.edit_original_response(embed=embed)
+
+    @commands.command(name="tokenleaderboard", aliases=["toptoken", "topusers"])
+    async def leaderboard_token_prefix(self, ctx):
+        """Prefix command for token leaderboard."""
+        if not ctx.guild:
+            await ctx.reply("❌ This command can only be used in a Discord server.")
+            return
+
+        leaderboard, guild_summary = await get_guild_token_leaderboard(
+            ctx.guild.id, limit=10
+        )
+
+        embed = discord.Embed(
+            title=f"🏆 Token Usage Leaderboard — {ctx.guild.name}",
+            description=(
+                f"**Guild Total Usage:** `{guild_summary['guild_total_tokens']:,}` tokens\n"
+                f"*(Input: `{guild_summary['guild_prompt_tokens']:,}` • Output: `{guild_summary['guild_completion_tokens']:,}`)*\n\n"
+                "**Top 10 Active AI Users:**"
+            ),
+            color=discord.Color.gold(),
+        )
+
+        if not leaderboard:
+            embed.description += (
+                "\n*No token interactions recorded in this server yet.*"
+            )
+        else:
+            rank_medals = ["🥇", "🥈", "🥉"]
+            for idx, item in enumerate(leaderboard, start=1):
+                medal = (
+                    rank_medals[idx - 1] if idx <= len(rank_medals) else f"**#{idx}**"
+                )
+                embed.add_field(
+                    name=f"{medal} {item['username']}",
+                    value=f"`{item['total_tokens']:,}` tokens ({item['interactions']} chats)",
+                    inline=False,
+                )
+
+        embed.set_footer(text="Aggregated directly via PostgreSQL Analytics")
+        await ctx.reply(embed=embed)
+
     @commands.Cog.listener()
     async def on_message(self, message):
         # Prevents the bot from replying to itself
         if message.author == self.bot.user:
             return
 
-        # Cek apakah bot di-tag dalam pesan
-        if self.bot.user.mentioned_in(message) and not message.mention_everyone:
+        # Cek apakah bot di-tag dalam pesan (direct mention atau raw mention)
+        is_mentioned = (
+            self.bot.user.mentioned_in(message)
+            or (self.bot.user in message.mentions)
+            or (f"<@{self.bot.user.id}>" in message.content)
+            or (f"<@!{self.bot.user.id}>" in message.content)
+        )
+
+        if is_mentioned and not message.mention_everyone:
             # Check if it's a command prefix (e.g., typo) ignore
             if message.content.startswith("$"):
                 return
 
-            is_healthy, error_msg = await check_services_health()
-            if not is_healthy:
-                await message.reply(content=error_msg)
-                return
+            try:
+                is_healthy, error_msg = await check_services_health()
+                if not is_healthy:
+                    await message.reply(content=error_msg)
+                    return
 
-            # Fetch 10 previous messages history
-            history_msgs = []
-            total_chars = 0
+                # Fetch previous messages history safely
+                history_msgs = []
+                total_chars = 0
+                max_chars = int(os.environ.get("MAX_GROUP_CONTEXT_CHARS", 15000))
 
-            # Get context limit from env variable, default 15000
-            max_chars = int(os.environ.get("MAX_GROUP_CONTEXT_CHARS", 15000))
+                try:
+                    async for msg in message.channel.history(limit=10, before=message):
+                        content = msg.clean_content
+                        if content:
+                            formatted_msg = f"{msg.author.name}: {content}"
+                            if total_chars + len(formatted_msg) > max_chars:
+                                break
+                            history_msgs.append(formatted_msg)
+                            total_chars += len(formatted_msg)
+                except Exception as hist_err:
+                    logger.warning(
+                        f"Could not fetch channel history (permission or channel type): {hist_err}"
+                    )
 
-            async for msg in message.channel.history(limit=10, before=message):
-                content = msg.clean_content
-                if content:
-                    # Format: "User: Message"
-                    formatted_msg = f"{msg.author.name}: {content}"
-                    # If exceeding character limit, stop fetching messages (discard oldest)
-                    if total_chars + len(formatted_msg) > max_chars:
-                        break
-                    history_msgs.append(formatted_msg)
-                    total_chars += len(formatted_msg)
+                history_msgs.reverse()
+                context_text = "\n".join(history_msgs)
 
-            history_msgs.reverse()  # Sort from oldest to newest
-            context_text = "\n".join(history_msgs)
+                # Clean bot mention from user message cleanly
+                import re
 
-            # Remove bot's name from user's message for a cleaner prompt
-            user_prompt = message.clean_content.replace(
-                f"@{self.bot.user.name}", ""
-            ).strip()
+                user_prompt = re.sub(r"<@!?\d+>", "", message.content).strip()
+                if not user_prompt:
+                    user_prompt = message.clean_content.replace(
+                        f"@{self.bot.user.name}", ""
+                    ).strip()
 
-            if context_text:
-                final_prompt = f"[Channel History Context]\n{context_text}\n\n[User's Message]\n{user_prompt}"
-            else:
-                final_prompt = user_prompt
+                if not user_prompt:
+                    user_prompt = "Halo Nexo!"
 
-            logger.info(
-                f"Group Chat User: {message.author.name} tagged bot. History size: {total_chars} chars."
-            )
+                if context_text:
+                    final_prompt = f"[Channel History Context]\n{context_text}\n\n[User's Message]\n{user_prompt}"
+                else:
+                    final_prompt = user_prompt
 
-            position = self.bot.message_queue.qsize()
-            if self.bot.bot_lock.locked():
-                position += 1
-
-            if position > 0:
-                await message.reply(
-                    f"⏳ *Your question is currently queued at position #{position}. Please wait a moment!*"
+                logger.info(
+                    f"Group Chat User: {message.author.name} tagged bot. History size: {total_chars} chars."
                 )
 
-            await self.bot.message_queue.put((message, final_prompt, time.time()))
+                position = self.bot.message_queue.qsize()
+                if self.bot.bot_lock.locked():
+                    position += 1
+
+                if position > 0:
+                    await message.reply(
+                        f"⏳ *Your question is currently queued at position #{position}. Please wait a moment!*"
+                    )
+
+                await self.bot.message_queue.put((message, final_prompt, time.time()))
+
+            except Exception as tag_err:
+                logger.error(f"Error handling mentioned message: {tag_err}")
 
 
 async def setup(bot):

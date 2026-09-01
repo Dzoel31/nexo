@@ -14,8 +14,11 @@ from db.repository import (
     get_conversation_context,
     save_message,
     check_and_trigger_rolling_summary,
+    log_token_usage,
+    count_token,
     MessageRole,
 )
+import time
 
 logger = logging.getLogger("mcp_client")
 
@@ -278,9 +281,11 @@ async def process_with_mcp_tools(
     ctx_obj=None,
 ):
     """
-    Process a user question with MCP tool support and context memory.
-    Returns (reply_text, used_tools_boolean)
+    Process a user question with MCP tool support, latency tracking, token usage analytics, and context memory.
+    Returns (reply_text, used_tools_boolean, usage_dict, elapsed_s)
     """
+    start_time = time.perf_counter()
+
     channel_id = (
         getattr(ctx_obj.channel, "id", None)
         if ctx_obj and hasattr(ctx_obj, "channel")
@@ -288,7 +293,7 @@ async def process_with_mcp_tools(
     )
     conv = await get_or_create_conversation(user_id, channel_id)
 
-    summary, recent_messages = await get_conversation_context(user_id)
+    summary, recent_messages, history_tokens = await get_conversation_context(user_id)
 
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -339,9 +344,15 @@ async def process_with_mcp_tools(
     messages.append({"role": "user", "content": dynamic_user_prompt})
 
     used_tools = False
+    total_prompt_tokens = 0
+    total_completion_tokens = 0
+
+    guild_id = None
+    if ctx_obj:
+        if hasattr(ctx_obj, "guild") and ctx_obj.guild:
+            guild_id = ctx_obj.guild.id
 
     for iteration in range(max_iterations):
-        # Combine tools from local Cogs and external MCP
         all_tools = []
         if getattr(bot, "ai_tools", None):
             all_tools.extend(bot.ai_tools)
@@ -361,20 +372,22 @@ async def process_with_mcp_tools(
         try:
             response = await ai_client.chat.completions.create(**kwargs)
 
+            # Accumulate token usage from response if available
+            if hasattr(response, "usage") and response.usage:
+                total_prompt_tokens += response.usage.prompt_tokens or 0
+                total_completion_tokens += response.usage.completion_tokens or 0
+
             choice = response.choices[0]
             message = choice.message
 
             # Check if the model wants to call a tool
             if message.tool_calls:
                 used_tools = True
-                # Add the assistant's message to the conversation
                 messages.append(message)
 
-                # Execute all tool calls
                 for tool_call in message.tool_calls:
                     tool_name = tool_call.function.name
 
-                    # Parse arguments - handle both string and dict formats
                     args = tool_call.function.arguments
                     if isinstance(args, str):
                         arguments = json.loads(args)
@@ -383,7 +396,6 @@ async def process_with_mcp_tools(
 
                     logger.info(f"Executing tool: {tool_name} with args: {arguments}")
 
-                    # Execute tool: Check if it's a Local Tool from a Cog, if not, send to MCP Server
                     if (
                         hasattr(bot, "local_tool_handlers")
                         and tool_name in bot.local_tool_handlers
@@ -399,7 +411,6 @@ async def process_with_mcp_tools(
                     else:
                         result = await execute_mcp_tool(tool_name, arguments)
 
-                    # Add the tool result to the conversation
                     messages.append(
                         {
                             "role": "tool",
@@ -408,7 +419,6 @@ async def process_with_mcp_tools(
                             "content": result,
                         }
                     )
-                    # Format log for better readability (especially for large JSON structures)
                     try:
                         parsed = json.loads(result)
                         if isinstance(parsed, list):
@@ -426,27 +436,104 @@ async def process_with_mcp_tools(
 
                     logger.info(f"Tool '{tool_name}' result: {log_msg}")
 
-                # Continue to next iteration to let the model process the results
                 continue
             else:
-                # No tool calls, return the final response
                 reply = message.content or "I don't have a response."
 
-                # Update conversation history cleanly
-                await save_message(conv.id, MessageRole.USER, user_question)
-                await save_message(conv.id, MessageRole.ASSISTANT, reply)
+                # Fallback estimation if usage was not returned
+                if total_prompt_tokens == 0:
+                    total_prompt_tokens = sum(
+                        await count_token(str(m.get("content", "")))
+                        for m in messages
+                        if isinstance(m, dict)
+                    )
+                if total_completion_tokens == 0:
+                    total_completion_tokens = await count_token(reply)
+
+                total_tokens = total_prompt_tokens + total_completion_tokens
+                elapsed_s = time.perf_counter() - start_time
+                latency_ms = int(elapsed_s * 1000)
+
+                # Persist message history with exact token count
+                user_msg_tokens = await count_token(user_question)
+                reply_msg_tokens = await count_token(reply)
+                await save_message(
+                    conv.id,
+                    MessageRole.USER,
+                    user_question,
+                    token_count=user_msg_tokens,
+                )
+                await save_message(
+                    conv.id,
+                    MessageRole.ASSISTANT,
+                    reply,
+                    token_count=reply_msg_tokens,
+                )
+
+                # Log token usage asynchronously in DB
+                asyncio.create_task(
+                    log_token_usage(
+                        guild_id=guild_id,
+                        user_id=user_id,
+                        username=user_name,
+                        prompt_tokens=total_prompt_tokens,
+                        completion_tokens=total_completion_tokens,
+                        total_tokens=total_tokens,
+                        latency_ms=latency_ms,
+                    )
+                )
+
+                # Setup visual compaction callbacks for Discord message
+                trigger_msg = None
+                if isinstance(ctx_obj, discord.Message):
+                    trigger_msg = ctx_obj
+                elif hasattr(ctx_obj, "message") and isinstance(
+                    ctx_obj.message, discord.Message
+                ):
+                    trigger_msg = ctx_obj.message
+
+                async def on_compaction_start():
+                    if trigger_msg:
+                        try:
+                            await trigger_msg.add_reaction("🧠")
+                        except Exception:
+                            pass
+
+                async def on_compaction_end():
+                    if trigger_msg:
+                        try:
+                            if bot.user:
+                                await trigger_msg.remove_reaction("🧠", bot.user)
+                        except Exception:
+                            pass
 
                 asyncio.create_task(
-                    check_and_trigger_rolling_summary(user_id, ai_client)
+                    check_and_trigger_rolling_summary(
+                        user_id,
+                        ai_client,
+                        on_compaction_start=on_compaction_start,
+                        on_compaction_end=on_compaction_end,
+                    )
                 )
-                return reply, used_tools
+
+                usage_data = {
+                    "prompt_tokens": total_prompt_tokens,
+                    "completion_tokens": total_completion_tokens,
+                    "total_tokens": total_tokens,
+                    "latency_ms": latency_ms,
+                }
+                return reply, used_tools, usage_data, elapsed_s
 
         except Exception as e:
             logger.error(f"Unexpected error: {e}")
             traceback.print_exc()
-            return f"I encountered an error: {str(e)}", False
+            elapsed_s = time.perf_counter() - start_time
+            return f"I encountered an error: {str(e)}", False, {}, elapsed_s
 
+    elapsed_s = time.perf_counter() - start_time
     return (
         "I've tried using tools but couldn't complete your request. Please try again or rephrase your question.",
         used_tools,
+        {},
+        elapsed_s,
     )

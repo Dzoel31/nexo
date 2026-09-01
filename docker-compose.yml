@@ -1,9 +1,6 @@
 services:
   nexo-bot:
     image: ksmaiotupnvj/nexo-bot:latest
-    build:
-      context: .
-      dockerfile: Dockerfile
     container_name: nexo_bot
     restart: always
     ports:
@@ -11,11 +8,15 @@ services:
     environment:
       - DISCORD_BOT_TOKEN
       - PORT
+      - HOST
+      - DATABASE_URL
       - GITHUB_SECRET
+      - ANNOUNCEMENT_CHANNEL_ID
       - WEBHOOK_DEVLOGS_CHANNEL_ID
       - WEBHOOK_RELEASE_NOTES_CHANNEL_ID
       - WELCOME_AND_RULES_CHANNEL_ID
       - LLAMA_SERVER_URL
+      - LLAMA_TOKENIZE_URL
       - MCP_SERVER_URL
     volumes:
       - ./prompts:/app/prompts
