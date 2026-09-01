@@ -1,4 +1,4 @@
-{% if role_mention %}{{ role_mention }} {% endif %}📢 **PENGUMUMAN ACARA BARU**
+📢 **PENGUMUMAN ACARA BARU**
 
 **{{ event.name }}**
 {{ event.description }}
@@ -8,4 +8,9 @@
 📍 **Lokasi:** {{ event.location }}
 
 Klik card event di bawah untuk menandai kehadiran kamu! 👇
+{% if role_mention %}
+
+{{ role_mention }}
+{% endif %}
+
 {{ event.event_url }}

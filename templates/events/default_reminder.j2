@@ -1,9 +1,16 @@
-{% if role_mention %}{{ role_mention }} {% endif %}⏰ **PENGINGAT ACARA: {{ time_label }}!**
+⏰ **PENGINGAT ACARA: {{ time_label }}!**
 
 Sesi **{{ event.name }}** akan segera dimulai.
+{% if event.description %}
+{{ event.description }}
+{% endif %}
 
 📍 **Lokasi:** {{ event.location }}
 ⏰ **Waktu Mulai:** {{ formatted_time }} WIB
 🔗 **Link Event:** {{ event.event_url }}
 
 Yuk segera bersiap dan bergabung ke room! 🚀
+{% if role_mention %}
+
+{{ role_mention }}
+{% endif %}

@@ -256,6 +256,32 @@ class ServerEvents(commands.Cog):
             if not broadcast_channel:
                 broadcast_channel = getattr(ctx_obj, "channel", guild.system_channel)
 
+            # Resolve Target Role / Mention
+            target_role_id = None
+            role_mention = None
+            if getattr(event_data, "target_role", None):
+                tr_clean = str(event_data.target_role).strip()
+                if tr_clean.lower() in ("@everyone", "everyone"):
+                    role_mention = "@everyone"
+                    target_role_id = guild.id
+                elif tr_clean.lower() in ("@here", "here"):
+                    role_mention = "@here"
+                else:
+                    matched_role = None
+                    role_id_match = re.search(r"\d+", tr_clean)
+                    if role_id_match:
+                        matched_role = guild.get_role(int(role_id_match.group(0)))
+                    if not matched_role:
+                        for r in guild.roles:
+                            if r.name.lower() == tr_clean.lower().replace("@", ""):
+                                matched_role = r
+                                break
+                    if matched_role:
+                        target_role_id = matched_role.id
+                        role_mention = matched_role.mention
+                    else:
+                        role_mention = tr_clean
+
             # Render Broadcast Template via Jinja2
             initial_context = {
                 "event": {
@@ -266,7 +292,7 @@ class ServerEvents(commands.Cog):
                 },
                 "formatted_date": format_indonesian_date(start_dt),
                 "formatted_time": format_time_wib(start_dt),
-                "role_mention": None,
+                "role_mention": role_mention,
             }
 
             broadcast_msg = None
@@ -275,7 +301,12 @@ class ServerEvents(commands.Cog):
                     rendered_msg = render_event_template(
                         "events/broadcast_initial.j2", initial_context
                     )
-                    broadcast_msg = await broadcast_channel.send(rendered_msg)
+                    broadcast_msg = await broadcast_channel.send(
+                        rendered_msg,
+                        allowed_mentions=discord.AllowedMentions(
+                            everyone=True, roles=True, users=True
+                        ),
+                    )
                 except Exception as b_err:
                     logger.error(f"Failed to send initial event broadcast: {b_err}")
 
@@ -300,7 +331,7 @@ class ServerEvents(commands.Cog):
                     reminder_intervals=pruned_intervals,
                     reminders_sent=[],
                     template_name="default_reminder.j2",
-                    target_role_id=None,
+                    target_role_id=target_role_id,
                     is_active=True,
                 )
                 session.add(db_event)
@@ -407,7 +438,12 @@ class ServerEvents(commands.Cog):
                             "role_mention": None,
                         },
                     )
-                    await broadcast_channel.send(comp_text)
+                    await broadcast_channel.send(
+                        comp_text,
+                        allowed_mentions=discord.AllowedMentions(
+                            everyone=True, roles=True, users=True
+                        ),
+                    )
                 except Exception as c_err:
                     logger.error(f"Failed to send broadcast completed message: {c_err}")
 
@@ -769,13 +805,19 @@ class ServerEvents(commands.Cog):
                                     comp_text = render_event_template(
                                         "events/broadcast_completed.j2", comp_ctx
                                     )
-                                    await channel.send(comp_text)
+                                    await channel.send(
+                                        comp_text,
+                                        allowed_mentions=discord.AllowedMentions(
+                                            everyone=True, roles=True, users=True
+                                        ),
+                                    )
                                 except Exception as comp_err:
                                     logger.error(
                                         f"Failed to send completion broadcast: {comp_err}"
                                     )
 
                         ev.is_active = False
+                        await session.commit()
                         continue
 
                     # 2. AUTO-START: Check if event start time has arrived
@@ -808,7 +850,12 @@ class ServerEvents(commands.Cog):
                                             "events/broadcast_started.j2",
                                             start_ctx,
                                         )
-                                        await channel.send(start_text)
+                                        await channel.send(
+                                            start_text,
+                                            allowed_mentions=discord.AllowedMentions(
+                                                everyone=True, roles=True, users=True
+                                            ),
+                                        )
                                     except Exception as start_err:
                                         logger.error(
                                             f"Failed to send started broadcast: {start_err}"
@@ -858,7 +905,12 @@ class ServerEvents(commands.Cog):
                                         or "events/default_reminder.j2",
                                         ctx,
                                     )
-                                    await channel.send(reminder_text)
+                                    await channel.send(
+                                        reminder_text,
+                                        allowed_mentions=discord.AllowedMentions(
+                                            everyone=True, roles=True, users=True
+                                        ),
+                                    )
                                 except Exception as send_err:
                                     logger.error(
                                         f"Failed to send reminder for event {ev.id}: {send_err}"
@@ -870,6 +922,7 @@ class ServerEvents(commands.Cog):
                     if dirty:
                         ev.reminders_sent = sent
                         flag_modified(ev, "reminders_sent")
+                        await session.commit()
 
                 await session.commit()
         except Exception as e:

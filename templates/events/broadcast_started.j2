@@ -1,4 +1,4 @@
-{% if role_mention %}{{ role_mention }} {% endif %}🚀 **ACARA SEDANG BERLANGSUNG!**
+🚀 **ACARA SEDANG BERLANGSUNG!**
 
 Sesi **{{ event.name }}** sekarang resmi dimulai!
 
@@ -6,3 +6,7 @@ Sesi **{{ event.name }}** sekarang resmi dimulai!
 🔗 **Link Event:** {{ event.event_url }}
 
 Yuk langsung masuk dan ramaikan sesinya sekarang! 🎧✨
+{% if role_mention %}
+
+{{ role_mention }}
+{% endif %}

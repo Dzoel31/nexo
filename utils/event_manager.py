@@ -31,16 +31,28 @@ INDONESIAN_MONTHS = {
 }
 
 
+WIB_TZ = timezone(timedelta(hours=7))
+
+
+def to_wib(dt: datetime) -> datetime:
+    """Converts any datetime (naive or tz-aware) to timezone-aware WIB (UTC+7)."""
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(WIB_TZ)
+
+
 def format_indonesian_date(dt: datetime) -> str:
-    """Formats a datetime object to Indonesian date format: e.g. 'Rabu, 02 September 2026'."""
-    day_name = INDONESIAN_DAYS.get(dt.weekday(), "")
-    month_name = INDONESIAN_MONTHS.get(dt.month, "")
-    return f"{day_name}, {dt.day:02d} {month_name} {dt.year}"
+    """Formats a datetime object to Indonesian date format in WIB: e.g. 'Rabu, 02 September 2026'."""
+    dt_wib = to_wib(dt)
+    day_name = INDONESIAN_DAYS.get(dt_wib.weekday(), "")
+    month_name = INDONESIAN_MONTHS.get(dt_wib.month, "")
+    return f"{day_name}, {dt_wib.day:02d} {month_name} {dt_wib.year}"
 
 
 def format_time_wib(dt: datetime) -> str:
-    """Formats a datetime to HH:MM format."""
-    return dt.strftime("%H:%M")
+    """Formats a datetime to HH:MM format in WIB (UTC+7)."""
+    dt_wib = to_wib(dt)
+    return dt_wib.strftime("%H:%M")
 
 
 def prune_reminder_intervals(
@@ -52,15 +64,13 @@ def prune_reminder_intervals(
     Rule: Keep interval X if (start_time - X minutes) > now + 5 minutes.
     Returns: List of valid intervals sorted descending.
     """
-    if now_dt is None:
-        if start_time.tzinfo is not None:
-            now_dt = datetime.now(start_time.tzinfo)
-        else:
-            now_dt = datetime.now(timezone.utc)
-    elif start_time.tzinfo is not None and now_dt.tzinfo is None:
-        now_dt = now_dt.replace(tzinfo=timezone.utc)
-    elif start_time.tzinfo is None and now_dt.tzinfo is not None:
+    if start_time.tzinfo is None:
         start_time = start_time.replace(tzinfo=timezone.utc)
+
+    if now_dt is None:
+        now_dt = datetime.now(timezone.utc)
+    elif now_dt.tzinfo is None:
+        now_dt = now_dt.replace(tzinfo=timezone.utc)
 
     cutoff_margin = timedelta(minutes=5)
     valid_intervals: List[int] = []
