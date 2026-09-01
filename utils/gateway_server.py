@@ -21,8 +21,18 @@ from utils.webhook_schemas import (
 logger = logging.getLogger("gateway_server")
 app = FastAPI(title="Nexo Webhook Gateway", docs_url="/docs")
 
-# Global reference to discord bot
+# Global reference to discord bot and strong references for background tasks
 _bot: commands.Bot | None = None
+_background_tasks: set[asyncio.Task] = set()
+
+
+def launch_background_task(coro) -> asyncio.Task:
+    """Safely launches a background task keeping a strong reference against GC in Python 3.12+."""
+    task = asyncio.create_task(coro)
+    _background_tasks.add(task)
+    task.add_done_callback(_background_tasks.discard)
+    return task
+
 
 # Jinja2 Template Loader
 TEMPLATES_DIR = Path("templates")
@@ -137,7 +147,7 @@ async def webhook_handler(request: Request):
                 )
             }
             target_channel_id = repo_config.get("discord_channel_id")
-            asyncio.create_task(
+            launch_background_task(
                 cog.send_discord_notification(
                     ping_msg, target_channel_id=target_channel_id
                 )
@@ -178,7 +188,7 @@ async def webhook_handler(request: Request):
                     f"Stored payload to `{event_file}`."
                 ),
             }
-            asyncio.create_task(cog.send_discord_notification(devlog_msg))
+            launch_background_task(cog.send_discord_notification(devlog_msg))
 
         return {"status": "unsupported_event_stored", "event": event}
 
@@ -278,7 +288,7 @@ async def webhook_handler(request: Request):
 
             if is_cd_success:
                 # Defer sending rich CD announcement until AFTER VPS deployment succeeds
-                asyncio.create_task(
+                launch_background_task(
                     cog.trigger_docker_compose(
                         repo_key=repo_key,
                         repo_name=repo_full_name,
@@ -288,7 +298,7 @@ async def webhook_handler(request: Request):
                 )
             else:
                 # Standard non-CD event notification (Push, PR, In-progress workflow)
-                asyncio.create_task(
+                launch_background_task(
                     cog.send_discord_notification(
                         message_payload, target_channel_id=target_channel_id
                     )

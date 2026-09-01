@@ -17,9 +17,19 @@ TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "")
 
 intents = discord.Intents.default()
 intents.message_content = True  # Required to read message content
-intents.members = True  # Required for on_member_join events
+default_mentions = discord.AllowedMentions(
+    everyone=False,
+    roles=False,
+    users=True,
+    replied_user=True,
+)
 
-bot = commands.Bot(command_prefix="$", intents=intents, help_command=None)
+bot = commands.Bot(
+    command_prefix="$",
+    intents=intents,
+    help_command=None,
+    allowed_mentions=default_mentions,
+)
 
 # Bot Variables (Global State)
 bot.ai_tools = []

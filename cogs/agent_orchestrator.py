@@ -1,4 +1,5 @@
 import asyncio
+from datetime import datetime, timezone
 import json
 import logging
 import os
@@ -74,115 +75,142 @@ class AgentOrchestrator(commands.Cog):
             self.worker_task.cancel()
 
     async def worker(self):
-        """Constantly watches the queue and processes requests one by one"""
+        """Constantly watches the queue and processes requests one by one with guaranteed lifecycle and recovery"""
         while True:
             try:
                 queue_item = await self.bot.message_queue.get()
             except asyncio.CancelledError:
+                logger.info("Agent Orchestrator Worker shutting down gracefully.")
                 break
 
-            if len(queue_item) == 3:
-                ctx_obj, prompt, queued_time = queue_item
-            else:
-                ctx_obj, prompt = queue_item
-                queued_time = time.time()
+            try:
+                if len(queue_item) == 3:
+                    ctx_obj, prompt, queued_time = queue_item
+                else:
+                    ctx_obj, prompt = queue_item
+                    queued_time = time.time()
 
-            is_interaction = isinstance(ctx_obj, discord.Interaction)
-            user_id = ctx_obj.user.id if is_interaction else ctx_obj.author.id
-            user_name = ctx_obj.user.name if is_interaction else ctx_obj.author.name
-            channel = ctx_obj.channel
+                is_interaction = isinstance(ctx_obj, discord.Interaction)
+                user_id = ctx_obj.user.id if is_interaction else ctx_obj.author.id
+                user_name = ctx_obj.user.name if is_interaction else ctx_obj.author.name
+                channel = ctx_obj.channel
 
-            async with self.bot.bot_lock:
-                is_expired = (time.time() - queued_time) > 850
-                wait_msg = None
+                async with self.bot.bot_lock:
+                    is_expired = (time.time() - queued_time) > 850
+                    wait_msg = None
 
-                if not is_expired:
-                    try:
-                        if is_interaction:
-                            await ctx_obj.edit_original_response(
-                                content="*Nexo is thinking... 💭*"
-                            )
-                        else:
-                            wait_msg = await ctx_obj.reply("*Nexo is thinking... 💭*")
-                    except discord.NotFound:
-                        is_expired = True
-
-                try:
-                    # Keep typing indicator active during processing
-                    async with channel.typing():
-                        (
-                            reply,
-                            used_tools,
-                            usage,
-                            elapsed_s,
-                        ) = await process_with_mcp_tools(
-                            self.bot,
-                            user_id,
-                            user_name,
-                            prompt,
-                            ctx_obj=ctx_obj,
-                        )
-
-                    # Build metadata footer
-                    prompt_tok = usage.get("prompt_tokens")
-                    comp_tok = usage.get("completion_tokens")
-                    if prompt_tok is not None and comp_tok is not None:
-                        footer_text = f"⚡ {elapsed_s:.2f}s • In: {prompt_tok:,} tokens • Out: {comp_tok:,} tokens"
-                    else:
-                        footer_text = f"⚡ {elapsed_s:.2f}s • Nexo KSM AIoT"
-
-                    if reply:
-                        safe_reply = reply[:4096]
-                        embed = discord.Embed(
-                            title="✨ Nexo Response",
-                            description=safe_reply,
-                            color=discord.Color.blue(),
-                        )
-                        embed.set_footer(text=footer_text)
-
-                        if is_expired:
-                            await channel.send(
-                                content=f"<@{user_id}> Sorry for the long wait! Here is your response:",
-                                embed=embed,
-                            )
-                        else:
+                    if not is_expired:
+                        try:
                             if is_interaction:
                                 await ctx_obj.edit_original_response(
-                                    content=None, embed=embed
+                                    content="*Nexo is thinking... 💭*"
                                 )
                             else:
-                                if wait_msg:
-                                    await wait_msg.edit(content=None, embed=embed)
-                                else:
+                                wait_msg = await ctx_obj.reply(
+                                    "*Nexo is thinking... 💭*"
+                                )
+                        except discord.NotFound, discord.HTTPException:
+                            is_expired = True
+
+                    reply = None
+                    try:
+                        # Keep typing indicator active during processing
+                        async with channel.typing():
+                            (
+                                reply,
+                                used_tools,
+                                usage,
+                                elapsed_s,
+                            ) = await process_with_mcp_tools(
+                                self.bot,
+                                user_id,
+                                user_name,
+                                prompt,
+                                ctx_obj=ctx_obj,
+                            )
+
+                        # Build metadata footer
+                        prompt_tok = usage.get("prompt_tokens")
+                        comp_tok = usage.get("completion_tokens")
+                        if prompt_tok is not None and comp_tok is not None:
+                            footer_text = f"⚡ {elapsed_s:.2f}s • In: {prompt_tok:,} tokens • Out: {comp_tok:,} tokens"
+                        else:
+                            footer_text = f"⚡ {elapsed_s:.2f}s • Nexo KSM AIoT"
+
+                        if reply:
+                            safe_reply = reply[:4096]
+                            embed = discord.Embed(
+                                title="✨ Nexo Response",
+                                description=safe_reply,
+                                color=discord.Color.blue(),
+                            )
+                            embed.set_footer(text=footer_text)
+
+                            if is_expired:
+                                await channel.send(
+                                    content=f"<@{user_id}> Sorry for the long wait! Here is your response:",
+                                    embed=embed,
+                                )
+                            else:
+                                try:
+                                    if is_interaction:
+                                        await ctx_obj.edit_original_response(
+                                            content=None, embed=embed
+                                        )
+                                    else:
+                                        if wait_msg:
+                                            await wait_msg.edit(
+                                                content=None, embed=embed
+                                            )
+                                        else:
+                                            await channel.send(
+                                                content=f"<@{user_id}>", embed=embed
+                                            )
+                                except discord.NotFound, discord.HTTPException:
                                     await channel.send(
                                         content=f"<@{user_id}>", embed=embed
                                     )
 
-                        logger.info(
-                            f"Sent response (length: {len(reply)} chars, {footer_text})"
-                        )
+                            logger.info(
+                                f"Sent response (length: {len(reply)} chars, {footer_text})"
+                            )
 
-                except discord.NotFound:
-                    await channel.send(f"<@{user_id}> {reply}")
-                except Exception as e:
-                    logger.error(
-                        f"Unexpected error while processing AI request for user {user_id}: {e}",
-                        exc_info=True,
-                    )
-                    err_text = (
-                        "Oops, maaf! Nexo mengalami kendala teknis saat memproses pesanmu. "
-                        "Silakan coba sesaat lagi ya! 🤖"
-                    )
-                    if is_expired:
-                        await channel.send(f"<@{user_id}> {err_text}")
-                    else:
-                        if is_interaction:
-                            await ctx_obj.edit_original_response(content=err_text)
+                    except discord.NotFound, discord.HTTPException:
+                        if reply:
+                            await channel.send(f"<@{user_id}> {reply}")
+                    except Exception as e:
+                        logger.error(
+                            f"Unexpected error while processing AI request for user {user_id}: {e}",
+                            exc_info=True,
+                        )
+                        err_text = (
+                            "Oops, maaf! Nexo mengalami kendala teknis saat memproses pesanmu. "
+                            "Silakan coba sesaat lagi ya! 🤖"
+                        )
+                        if is_expired:
+                            await channel.send(f"<@{user_id}> {err_text}")
                         else:
-                            if wait_msg:
-                                await wait_msg.edit(content=err_text)
-                finally:
-                    self.bot.message_queue.task_done()
+                            try:
+                                if is_interaction:
+                                    await ctx_obj.edit_original_response(
+                                        content=err_text
+                                    )
+                                else:
+                                    if wait_msg:
+                                        await wait_msg.edit(content=err_text)
+                                    else:
+                                        await channel.send(f"<@{user_id}> {err_text}")
+                            except discord.NotFound, discord.HTTPException:
+                                await channel.send(f"<@{user_id}> {err_text}")
+
+            except Exception as outer_err:
+                logger.critical(
+                    f"Fatal unhandled exception in Agent Orchestrator Worker loop: {outer_err}",
+                    exc_info=True,
+                )
+                await asyncio.sleep(0.5)
+            finally:
+                self.bot.message_queue.task_done()
 
     @app_commands.command(name="tanya", description="Ask Nexo about KSM AIoT projects!")
     @app_commands.describe(pertanyaan="What do you want to ask?")
@@ -228,6 +256,7 @@ class AgentOrchestrator(commands.Cog):
         embed = discord.Embed(
             title=f"📊 Token Usage Statistics — {interaction.user.display_name}",
             color=discord.Color.teal(),
+            timestamp=datetime.now(timezone.utc),
         )
         embed.add_field(
             name="📥 Prompt Tokens (Input)",
@@ -254,7 +283,9 @@ class AgentOrchestrator(commands.Cog):
             value=f"`{stats['avg_tokens_per_interaction']:,}` tokens",
             inline=True,
         )
-        embed.set_footer(text="Nexo Token Analytics • PostgreSQL Persistence")
+        embed.set_footer(
+            text="💡 Tip: Gunakan $reset untuk membersihkan konteks memori aktif."
+        )
         await interaction.edit_original_response(embed=embed)
 
     @commands.command(name="tokenstats", aliases=["tokens", "mytoken"])
@@ -265,6 +296,7 @@ class AgentOrchestrator(commands.Cog):
         embed = discord.Embed(
             title=f"📊 Token Usage Statistics — {ctx.author.display_name}",
             color=discord.Color.teal(),
+            timestamp=datetime.now(timezone.utc),
         )
         embed.add_field(
             name="📥 Prompt Tokens",
@@ -291,7 +323,9 @@ class AgentOrchestrator(commands.Cog):
             value=f"`{stats['avg_tokens_per_interaction']:,}`",
             inline=True,
         )
-        embed.set_footer(text="Nexo Token Analytics • PostgreSQL Persistence")
+        embed.set_footer(
+            text="💡 Tip: Gunakan $reset untuk membersihkan konteks memori aktif."
+        )
         await ctx.reply(embed=embed)
 
     @app_commands.command(
@@ -321,6 +355,7 @@ class AgentOrchestrator(commands.Cog):
                 "**Top 10 Active AI Users:**"
             ),
             color=discord.Color.gold(),
+            timestamp=datetime.now(timezone.utc),
         )
 
         if not leaderboard:
@@ -342,7 +377,7 @@ class AgentOrchestrator(commands.Cog):
                     inline=False,
                 )
 
-        embed.set_footer(text="Aggregated directly via PostgreSQL Analytics")
+        embed.set_footer(text="Nexo AIoT Engine • Data diperbarui secara real-time")
         await interaction.edit_original_response(embed=embed)
 
     @commands.command(name="tokenleaderboard", aliases=["toptoken", "topusers"])
@@ -364,6 +399,7 @@ class AgentOrchestrator(commands.Cog):
                 "**Top 10 Active AI Users:**"
             ),
             color=discord.Color.gold(),
+            timestamp=datetime.now(timezone.utc),
         )
 
         if not leaderboard:
@@ -382,7 +418,7 @@ class AgentOrchestrator(commands.Cog):
                     inline=False,
                 )
 
-        embed.set_footer(text="Aggregated directly via PostgreSQL Analytics")
+        embed.set_footer(text="Nexo AIoT Engine • Data diperbarui secara real-time")
         await ctx.reply(embed=embed)
 
     @commands.Cog.listener()
@@ -399,7 +435,7 @@ class AgentOrchestrator(commands.Cog):
             or (f"<@!{self.bot.user.id}>" in message.content)
         )
 
-        if is_mentioned and not message.mention_everyone:
+        if is_mentioned:
             # Check if it's a command prefix (e.g., typo) ignore
             if message.content.startswith("$"):
                 return

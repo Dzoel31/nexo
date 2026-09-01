@@ -366,7 +366,8 @@ async def process_with_mcp_tools(
             "top_p": 0.95,
             "max_tokens": 1024,
         }
-        if all_tools:
+        # On the last iteration, omit tools to force the model to summarize existing data into text
+        if all_tools and iteration < (max_iterations - 1):
             kwargs["tools"] = sanitize_tools_list(all_tools)
 
         try:
@@ -381,35 +382,59 @@ async def process_with_mcp_tools(
             message = choice.message
 
             # Check if the model wants to call a tool
-            if message.tool_calls:
+            if message.tool_calls and iteration < (max_iterations - 1):
                 used_tools = True
                 messages.append(message)
 
                 for tool_call in message.tool_calls:
                     tool_name = tool_call.function.name
-
                     args = tool_call.function.arguments
+                    arguments = {}
+
                     if isinstance(args, str):
-                        arguments = json.loads(args)
-                    else:
+                        try:
+                            arguments = json.loads(args) if args.strip() else {}
+                        except (json.JSONDecodeError, TypeError) as json_err:
+                            logger.warning(
+                                f"Malformed JSON arguments from model for tool '{tool_name}': {args} | Error: {json_err}"
+                            )
+                            messages.append(
+                                {
+                                    "role": "tool",
+                                    "tool_call_id": tool_call.id,
+                                    "name": tool_name,
+                                    "content": f"Error: Format argumen JSON tidak valid ({json_err}). Harap gunakan JSON yang valid.",
+                                }
+                            )
+                            continue
+                    elif isinstance(args, dict):
                         arguments = args
 
                     logger.info(f"Executing tool: {tool_name} with args: {arguments}")
 
-                    if (
-                        hasattr(bot, "local_tool_handlers")
-                        and tool_name in bot.local_tool_handlers
-                    ):
-                        import inspect
+                    try:
+                        if (
+                            hasattr(bot, "local_tool_handlers")
+                            and tool_name in bot.local_tool_handlers
+                        ):
+                            import inspect
 
-                        handler = bot.local_tool_handlers[tool_name]
-                        sig = inspect.signature(handler)
-                        if "ctx_obj" in sig.parameters:
-                            result = await handler(arguments, ctx_obj=ctx_obj)
+                            handler = bot.local_tool_handlers[tool_name]
+                            sig = inspect.signature(handler)
+                            if "ctx_obj" in sig.parameters:
+                                result = await handler(arguments, ctx_obj=ctx_obj)
+                            else:
+                                result = await handler(arguments)
                         else:
-                            result = await handler(arguments)
-                    else:
-                        result = await execute_mcp_tool(tool_name, arguments)
+                            result = await execute_mcp_tool(tool_name, arguments)
+                    except Exception as tool_exec_err:
+                        logger.error(
+                            f"Unhandled exception executing tool '{tool_name}': {tool_exec_err}",
+                            exc_info=True,
+                        )
+                        result = (
+                            f"Error executing tool '{tool_name}': {str(tool_exec_err)}"
+                        )
 
                     messages.append(
                         {
@@ -438,7 +463,10 @@ async def process_with_mcp_tools(
 
                 continue
             else:
-                reply = message.content or "I don't have a response."
+                reply = (
+                    message.content
+                    or "Maaf, Nexo belum memiliki respon untuk hal tersebut."
+                )
 
                 # Fallback estimation if usage was not returned
                 if total_prompt_tokens == 0:
