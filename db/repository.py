@@ -1,5 +1,6 @@
 import asyncio
 from collections import OrderedDict
+from datetime import datetime, timedelta, timezone
 import hashlib
 import logging
 import os
@@ -32,6 +33,9 @@ TOTAL_CONTEXT_WINDOW = 8448
 COMPACTION_THRESHOLD = 4500
 # Target sisa token riwayat aktif yang dipertahankan setelah perangkuman
 TARGET_RETAIN_TOKENS = 1800
+
+# 24-Hour Sliding TTL for Inactive Conversation Context
+CONVERSATION_TTL = timedelta(hours=24)
 
 # ---------------------------------------------------------
 # TRUE LRU TOKEN CACHE & PERSISTENT SESSION
@@ -121,7 +125,11 @@ async def count_token(
 async def get_or_create_conversation(
     user_id: int, channel_id: int | None = None
 ) -> Conversation:
-    """Getting an active conversation based on user_id or creating a new one if not exists."""
+    """
+    Getting an active conversation based on user_id or creating a new one.
+    Implements 24-hour sliding TTL expiration for inactive conversations.
+    """
+    now_utc = datetime.now(timezone.utc)
     async with async_session() as session:
         stmt = (
             select(Conversation)
@@ -132,14 +140,49 @@ async def get_or_create_conversation(
         conversation = result.scalars().first()
 
         if not conversation:
-            conversation = Conversation(user_id=user_id, channel_id=channel_id)
+            conversation = Conversation(
+                user_id=user_id,
+                channel_id=channel_id,
+                created_at=now_utc,
+                updated_at=now_utc,
+            )
             session.add(conversation)
             await session.commit()
             await session.refresh(conversation)
             logger.info(
                 f"Created new conversation for user {user_id} (ID: {conversation.id})"
             )
+            return conversation
 
+        # Check 24-hour sliding TTL
+        last_activity = conversation.updated_at
+        if last_activity:
+            if last_activity.tzinfo is None:
+                last_activity = last_activity.replace(tzinfo=timezone.utc)
+
+            if (now_utc - last_activity) >= CONVERSATION_TTL:
+                logger.info(
+                    f"Conversation {conversation.id} for user {user_id} expired after 24h inactivity. "
+                    "Silently clearing history and resetting token counter."
+                )
+                await session.execute(
+                    delete(Message).where(Message.conversation_id == conversation.id)
+                )
+                conversation.summary = None
+                conversation.messages = []
+                conversation.updated_at = now_utc
+                if channel_id:
+                    conversation.channel_id = channel_id
+                await session.commit()
+                await session.refresh(conversation)
+                return conversation
+
+        # Update last activity timestamp on active conversation
+        conversation.updated_at = now_utc
+        if channel_id:
+            conversation.channel_id = channel_id
+        await session.commit()
+        await session.refresh(conversation)
         return conversation
 
 
@@ -149,12 +192,13 @@ async def save_message(
     content: str,
     token_count: int | None = None,
 ) -> MessageRead:
-    """Validates and saves a new message with incremental token_count to the database."""
+    """Validates and saves a new message with incremental token_count and sliding TTL touch to the database."""
     if token_count is None:
         token_count = await count_token(content)
 
     payload = MessageCreate(role=role, content=content, token_count=token_count)
 
+    now_utc = datetime.now(timezone.utc)
     async with async_session() as session:
         msg = Message(
             conversation_id=conversation_id,
@@ -163,6 +207,14 @@ async def save_message(
             token_count=payload.token_count,
         )
         session.add(msg)
+
+        # Update conversation updated_at for sliding TTL
+        conv_stmt = select(Conversation).filter_by(id=conversation_id)
+        conv_res = await session.execute(conv_stmt)
+        conv = conv_res.scalars().first()
+        if conv:
+            conv.updated_at = now_utc
+
         await session.commit()
         await session.refresh(msg)
         logger.info(
@@ -178,6 +230,7 @@ async def get_conversation_context(
     Retrieves conversation context for LLM based on token quota using incremental token counts.
     Returns (summary, list_messages_for_llm, total_conversation_tokens).
     """
+    now_utc = datetime.now(timezone.utc)
     async with async_session() as session:
         stmt = (
             select(Conversation)
@@ -189,6 +242,25 @@ async def get_conversation_context(
 
         if not conversation:
             return None, [], 0
+
+        # Check 24-hour sliding TTL
+        last_activity = conversation.updated_at
+        if last_activity:
+            if last_activity.tzinfo is None:
+                last_activity = last_activity.replace(tzinfo=timezone.utc)
+
+            if (now_utc - last_activity) >= CONVERSATION_TTL:
+                logger.info(
+                    f"Context expired for user {user_id} after 24h inactivity. Returning empty context."
+                )
+                await session.execute(
+                    delete(Message).where(Message.conversation_id == conversation.id)
+                )
+                conversation.summary = None
+                conversation.messages = []
+                conversation.updated_at = now_utc
+                await session.commit()
+                return None, [], 0
 
         sorted_messages = sorted(conversation.messages, key=lambda m: m.created_at)
         if not sorted_messages:

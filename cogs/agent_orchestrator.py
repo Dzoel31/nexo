@@ -165,7 +165,14 @@ class AgentOrchestrator(commands.Cog):
                 except discord.NotFound:
                     await channel.send(f"<@{user_id}> {reply}")
                 except Exception as e:
-                    err_text = f"Oops, sorry, there was an error while I was thinking: {str(e)} 😭"
+                    logger.error(
+                        f"Unexpected error while processing AI request for user {user_id}: {e}",
+                        exc_info=True,
+                    )
+                    err_text = (
+                        "Oops, maaf! Nexo mengalami kendala teknis saat memproses pesanmu. "
+                        "Silakan coba sesaat lagi ya! 🤖"
+                    )
                     if is_expired:
                         await channel.send(f"<@{user_id}> {err_text}")
                     else:
