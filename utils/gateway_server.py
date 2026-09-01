@@ -2,11 +2,12 @@ import os
 import json
 import html
 import logging
+import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 import asyncio
 import uvicorn
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, HTTPException, Header
 from jinja2 import Environment, FileSystemLoader
 from discord.ext import commands
 
@@ -38,6 +39,20 @@ def launch_background_task(coro) -> asyncio.Task:
 TEMPLATES_DIR = Path("templates")
 PROJECTS_CONFIG_PATH = Path("config/projects.json")
 
+
+def compact_markdown(text: str) -> str:
+    """Normalizes excessive newlines and removes blank lines between list items."""
+    if not text:
+        return ""
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    # Collapse 3 or more consecutive newlines into 2
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    # Remove blank lines between bullet points (- or *)
+    text = re.sub(r"(\n-\s+[^\n]+)\n\n(-\s+)", r"\1\n\2", text)
+    text = re.sub(r"(\n\*\s+[^\n]+)\n\n(\*\s+)", r"\1\n\2", text)
+    return text.strip()
+
+
 if not TEMPLATES_DIR.exists():
     TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
 env_template = Environment(
@@ -45,6 +60,34 @@ env_template = Environment(
     autoescape=False,
 )
 env_template.filters["unescape"] = html.unescape
+env_template.filters["compact_markdown"] = compact_markdown
+
+
+def save_webhook_payload(event: str, payload: Any, delivery: str = "") -> Path:
+    """Save every incoming GitHub webhook payload into data/payloads/{event}.json."""
+    data_dir = Path("data/payloads")
+    if not data_dir.exists():
+        data_dir.mkdir(parents=True, exist_ok=True)
+
+    safe_event_name = (
+        "".join(c for c in event if c.isalnum() or c in ("_", "-")) or "unknown"
+    )
+    event_file = data_dir / f"{safe_event_name}.json"
+    existing = []
+    if event_file.exists():
+        try:
+            with open(event_file, "r", encoding="utf-8") as f:
+                existing = json.load(f)
+                if not isinstance(existing, list):
+                    existing = [existing]
+        except Exception:
+            existing = []
+
+    existing.append(payload)
+    with open(event_file, "w", encoding="utf-8") as f:
+        json.dump(existing, f, indent=4, ensure_ascii=False)
+
+    return event_file
 
 
 def load_projects_config() -> dict[str, Any]:
@@ -99,10 +142,15 @@ async def health_check():
 
 
 @app.post("/nexo/webhook")
-async def webhook_handler(request: Request):
-    event = request.headers.get("X-GitHub-Event", "unknown")
-    delivery = request.headers.get("X-GitHub-Delivery", "unknown")
-    secret = request.headers.get("X-Hub-Signature-256", "")
+async def webhook_handler(
+    request: Request,
+    x_github_event: Optional[str] = Header(None, alias="X-GitHub-Event"),
+    x_github_delivery: Optional[str] = Header(None, alias="X-GitHub-Delivery"),
+    x_hub_signature_256: Optional[str] = Header(None, alias="X-Hub-Signature-256"),
+):
+    event = x_github_event or "unknown"
+    delivery = x_github_delivery or "unknown"
+    secret = x_hub_signature_256 or ""
 
     raw_body = await request.body()
     verify_signature(raw_body, secret)
@@ -116,6 +164,9 @@ async def webhook_handler(request: Request):
         raise HTTPException(status_code=400, detail="Invalid JSON payload")
 
     logger.info(f"Received GitHub event: '{event}', delivery ID: {delivery}")
+
+    # Always persist every incoming payload for analysis & debugging
+    event_file = save_webhook_payload(event, payload, delivery)
 
     schema_map = {
         "push": PushSchema,
@@ -158,27 +209,6 @@ async def webhook_handler(request: Request):
     schema_cls = schema_map.get(event)
     if schema_cls is None:
         logger.warning(f"Unsupported event type: {event} | delivery={delivery}")
-        data_dir = Path("data")
-        if not data_dir.exists():
-            data_dir.mkdir(parents=True, exist_ok=True)
-
-        safe_event_name = (
-            "".join(c for c in event if c.isalnum() or c in ("_", "-")) or "unsupported"
-        )
-        event_file = data_dir / f"{safe_event_name}.json"
-        existing = []
-        if event_file.exists():
-            try:
-                with open(event_file, "r", encoding="utf-8") as f:
-                    existing = json.load(f)
-                    if not isinstance(existing, list):
-                        existing = [existing]
-            except Exception:
-                existing = []
-
-        existing.append(payload)
-        with open(event_file, "w", encoding="utf-8") as f:
-            json.dump(existing, f, indent=4)
 
         if cog:
             devlog_msg = {
@@ -190,7 +220,11 @@ async def webhook_handler(request: Request):
             }
             launch_background_task(cog.send_discord_notification(devlog_msg))
 
-        return {"status": "unsupported_event_stored", "event": event}
+        return {
+            "status": "unsupported_event_stored",
+            "event": event,
+            "file": str(event_file),
+        }
 
     if not isinstance(payload, list):
         payload_items = [payload]

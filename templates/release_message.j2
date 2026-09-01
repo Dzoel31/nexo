@@ -1,42 +1,56 @@
+{% set body_text = (data.release.body | compact_markdown | default('No release notes provided.')) | truncate(3500) %}
+{% set content_text = "🚀 **GitHub Release Notification**\nRepo: **" ~ data.repository.full_name ~ "** | Release: `" ~ data.release.tag_name ~ "`" ~ ("\n<@&" ~ config.discord_role_id ~ ">" if config.discord_role_id else "") %}
+{% set tag_name = data.release.tag_name %}
 {
-  "content": "🚀 **GitHub Release Notification**\nRepo: **{{ data.repository.full_name }}** | Release: `{{ data.release.tag_name }}`\n\n {{ data.release.body | replace('\r', '') | replace('\n\n', '\n') | replace('\n', '\\n') | replace('\"', '\\\"') | truncate(1000) }}\n\n👇 Cek detail di bawah, gaes! @everyone",
+  "content": {{ content_text | tojson }},
   "embeds": [
     {
-      "title": "🚀 New Release in {{ data.repository.full_name }}",
-      "url": "{{ data.release.html_url }}",
-      "description": "Release **{{ data.release.tag_name }}** has been **{{ data.action }}** by **{{ data.release.author.login }}**.\n\n**Name:** {{ data.release.name | replace('\"', '\\\"') }}",
-      "color": 
-      {% if data.action == "published" %}
-      15964178 {# orange #}
-      {% elif data.action == "released" %}
-      3066993 {# green #}
-      {% elif data.action == "prereleased" %}
-      15105570 {# yellow #}
-      {% elif data.action == "created" and data.release.draft %}
-      9807270 {# gray #}
-      {% elif data.action == "created" %}
-      3447003 {# blue #}
-      {% else %}
-      2899536 {# default color (dark gray) #}
-      {% endif %}
-      ,
+      "title": {{ ("📦 Release " ~ (data.release.name or tag_name) ~ " (" ~ data.repository.name ~ ")") | tojson }},
+      "url": {{ (data.release.html_url | string) | tojson }},
+      "description": {{ body_text | tojson }},
+      "color": {% if data.action == "published" %}15964178{% elif data.action == "released" %}3066993{% elif data.action == "prereleased" %}15105570{% elif data.action == "created" and data.release.draft %}9807270{% elif data.action == "created" %}3447003{% else %}2899536{% endif %},
       "author": {
-        "name": "{{ data.release.author.login }}",
-        "icon_url": "{{ data.release.author.avatar_url }}" 
+        "name": {{ (data.release.author.login if data.release and data.release.author else 'GitHub Release') | tojson }},
+        "icon_url": {{ (data.release.author.avatar_url | string if data.release and data.release.author else '') | tojson }}
       },
       "fields": [
-        {"name": "Repo", "value": "{{ data.repository.full_name }}", "inline": true},
-        {"name": "Date", "value": "{{ data.release.published_at }}", "inline": true},
-        {"name": "Version", "value": "#{{ data.release.name }}", "inline": true},
-        {"name": "Action", "value": "{{ data.action }}", "inline": true},
-        {"name": "prerelease", "value": "{{ data.release.prerelease }}", "inline": true},
-        {"name": "Author", "value": "{{ data.release.author.login }}", "inline": true}
+        {"name": "Repository", "value": {{ data.repository.full_name | tojson }}, "inline": true},
+        {"name": "Version", "value": {{ ("`" ~ tag_name ~ "`") | tojson }}, "inline": true},
+        {"name": "Status", "value": {{ ("✅ " ~ data.action | capitalize) | tojson }}, "inline": true},
+        {"name": "Author", "value": {{ (data.release.author.login if data.release and data.release.author else 'System') | tojson }}, "inline": true},
+        {"name": "Prerelease", "value": {{ ("Yes" if data.release.prerelease else "No") | tojson }}, "inline": true},
+        {"name": "Published At", "value": {{ (data.release.published_at | default('-') | string) | tojson }}, "inline": true}
       ],
-      "thumbnail": {"url": "{{ data.release.author.avatar_url }}"},
+      "thumbnail": {"url": {{ (data.release.author.avatar_url | string if data.release and data.release.author else '') | tojson }}},
       "footer": {
-        "text": "Release notification"
+        "text": "Nexo GitHub Service • KSM AIoT"
       },
-      "timestamp": "{{ data.release.published_at | default('') }}"
+      "timestamp": {{ (data.release.published_at | default('') | string) | tojson }}
+    }
+  ],
+  "components": [
+    {
+      "type": 1,
+      "components": [
+        {
+          "type": 2,
+          "style": 5,
+          "label": "View Release",
+          "url": {{ (data.release.html_url | string) | tojson }},
+          "emoji": {
+            "name": "📦"
+          }
+        },
+        {
+          "type": 2,
+          "style": 5,
+          "label": "Repository",
+          "url": {{ (data.repository.html_url | string) | tojson }},
+          "emoji": {
+            "name": "📂"
+          }
+        }
+      ]
     }
   ]
 }

@@ -1,36 +1,68 @@
+{% set content_text = "🚀 **GitHub Push Notification**\nRepo: **" ~ data.repository.full_name ~ "** | Branch: `" ~ data.ref ~ "`" ~ ("\n<@&" ~ config.discord_role_id ~ ">" if config.discord_role_id else "") %}
+{% if data.commits and data.commits|length > 0 %}
+  {% set commit_lines = [] %}
+  {% for commit in data.commits[:10] %}
+    {% set clean_msg = commit.message.split('\n')[0] | truncate(60) %}
+    {% set commit_line = "• [`" ~ commit.id[:7] ~ "`](" ~ commit.url ~ ") " ~ clean_msg ~ " — *" ~ commit.author.name ~ "*" %}
+    {% set _ = commit_lines.append(commit_line) %}
+  {% endfor %}
+  {% set desc_text = "**" ~ data.pusher.name ~ "** pushed **" ~ (data.commits|length) ~ "** new commit(s):\n" ~ (commit_lines | join('\n')) %}
+  {% if data.commits|length > 10 %}
+    {% set desc_text = desc_text ~ "\n\n... and " ~ (data.commits|length - 10) ~ " other commit(s)." %}
+  {% endif %}
+{% elif data.head_commit %}
+  {% set desc_text = "**Update Reference (Tag/Merge):**\n• [`" ~ data.head_commit.id[:7] ~ "`](" ~ data.head_commit.url ~ ") - " ~ (data.head_commit.message.split('\n')[0] | truncate(80)) %}
+{% else %}
+  {% set desc_text = "⚠️ Branch Update (No Commit Details)" %}
+{% endif %}
 {
-  "content": "🚀 **GitHub Push Notification**\nRepo: **{{ data.repository.full_name }}** | Branch: `{{ data.ref }}`",
+  "content": {{ content_text | tojson }},
   "embeds": [
     {
-      "title": "🚀 New Push to {{ data.repository.full_name }}",
-      "url": "{{ data.compare }}",
-      "description": "{% if data.commits and data.commits|length > 0 %}{{ data.pusher.name }} pushed **{{ data.commits|length }}** commit(s):\n{% for commit in data.commits[:10] %}\n• [`{{ commit.id[:7] }}`]({{ commit.url }}) - {{ commit.message | replace('\"', '\\\"') | truncate(50) }} - **{{ commit.author.name }}**{% endfor %}{% if data.commits|length > 10 %}\n\n... dan {{ data.commits|length - 10 }} commit lainnya.{% endif %}{% elif data.head_commit %}**Update Reference (Tag/Merge):**\n• [`{{ data.head_commit.id[:7] }}`]({{ data.head_commit.url }}) - {{ data.head_commit.message | replace('\"', '\\\"') }}{% else %}⚠️ Branch Update (No Commit Details){% endif %}",
-      "color":
-      {% if data.deleted %}
-      9807270 {# gray #}
-      {% elif data.created %}
-      3066993 {# green #}
-      {% elif data.forced %}
-      15158332 {# red #}
-      {% else %}
-      3447003 {# blue #}
-      {% endif %}
-      ,
+      "title": {{ ("🚀 New push to " ~ data.repository.full_name) | tojson }},
+      "url": {{ (data.compare | string) | tojson }},
+      "description": {{ desc_text | tojson }},
+      "color": {% if data.deleted %}9807270{% elif data.created %}3066993{% elif data.forced %}15158332{% else %}3447003{% endif %},
       "author": {
-        "name": "{{ data.pusher.name }}",
-        "icon_url": "{{ data.sender.avatar_url }}" 
+        "name": {{ data.pusher.name | tojson }},
+        "icon_url": {{ (data.sender.avatar_url | string) | tojson }}
       },
       "fields": [
-        {"name": "Repo", "value": "{{ data.repository.full_name }}", "inline": true},
-        {"name": "Branch", "value": "{{ data.ref }}", "inline": true},
-        {"name": "Total Commits", "value": "{{ data.commits|length if data.commits else 0 }}", "inline": true},
-        {"name": "Pusher", "value": "{{ data.pusher.name }}", "inline": true}
+        {"name": "Repository", "value": {{ data.repository.full_name | tojson }}, "inline": true},
+        {"name": "Branch / Ref", "value": {{ ("`" ~ data.ref ~ "`") | tojson }}, "inline": true},
+        {"name": "Total Commits", "value": {{ ((data.commits|length if data.commits else 0) | string) | tojson }}, "inline": true},
+        {"name": "Pusher", "value": {{ data.pusher.name | tojson }}, "inline": true}
       ],
-      "thumbnail": {"url": "{{ data.sender.avatar_url }}"},
+      "thumbnail": {"url": {{ (data.sender.avatar_url | string) | tojson }}},
       "footer": {
-        "text": "Push notification"
+        "text": "Nexo GitHub Service • KSM AIoT"
       },
-      "timestamp": "{{ data.head_commit.timestamp | default('') }}"
+      "timestamp": {{ (data.head_commit.timestamp if data.head_commit else '') | tojson }}
+    }
+  ],
+  "components": [
+    {
+      "type": 1,
+      "components": [
+        {
+          "type": 2,
+          "style": 5,
+          "label": "Compare Commit (Diff)",
+          "url": {{ (data.compare | string) | tojson }},
+          "emoji": {
+            "name": "🔍"
+          }
+        },
+        {
+          "type": 2,
+          "style": 5,
+          "label": "Repository",
+          "url": {{ (data.repository.html_url | string) | tojson }},
+          "emoji": {
+            "name": "📂"
+          }
+        }
+      ]
     }
   ]
 }

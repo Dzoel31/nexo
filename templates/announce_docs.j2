@@ -1,19 +1,55 @@
+{% set content_text = "📚 **Documentation Updated!**" ~ ("\n<@&" ~ config.discord_role_id ~ ">" if config.discord_role_id else "") %}
+{% set target_url = data.repository.homepage if data.repository.homepage else (data.release.html_url if data.release and data.release.html_url else data.repository.html_url) %}
+{% set desc_intro = "Documentation for **" ~ data.repository.name ~ "** has been successfully published via **" ~ (data.workflow_run.name if data.workflow_run else 'Deploy Documentation') ~ "**." %}
+{% if data.release and data.release.body %}
+  {% set desc_text = desc_intro ~ "\n\n**📝 Release Notes:**\n" ~ (data.release.body | compact_markdown | truncate(2000)) %}
+{% elif data.workflow_run and data.workflow_run.display_title %}
+  {% set desc_text = desc_intro ~ "\n\n**📝 Changes:** `" ~ data.workflow_run.display_title ~ "`" %}
+{% else %}
+  {% set desc_text = desc_intro %}
+{% endif %}
+{% set trigger_actor = data.workflow_run.triggering_actor.login if data.workflow_run and data.workflow_run.triggering_actor else (data.sender.login if data.sender else 'System') %}
 {
-  "content": "📚 **Dokumentasi Baru Diperbarui!**{% if config.discord_role_id %}\n<@&{{ config.discord_role_id }}>{% endif %}",
+  "content": {{ content_text | tojson }},
   "embeds": [
     {
-      "title": "📚 Dokumentasi {{ data.repository.name }} Diperbarui",
-      "url": "{{ data.repository.homepage if data.repository.homepage else (data.release.html_url if data.release and data.release.html_url else data.repository.html_url) }}",
+      "title": {{ ("📚 " ~ data.repository.name ~ " Documentation Published") | tojson }},
+      "url": {{ (target_url | string) | tojson }},
       "color": 3447003,
-      "description": "Dokumentasi **{{ data.repository.name }}** telah berhasil dipublikasikan melalui **{{ data.workflow_run.name if data.workflow_run else 'Deploy Documentation' }}**.\n{% if data.release and data.release.body %}\n\n**Catatan Perubahan Dokumentasi:**\n```markdown\n{{ data.release.body }}\n```{% elif data.workflow_run and data.workflow_run.display_title %}\n\n**Pembaruan:** {{ data.workflow_run.display_title }}{% endif %}",
+      "description": {{ desc_text | tojson }},
       "fields": [
-        {"name": "Repo", "value": "{{ data.repository.full_name }}", "inline": true},
-        {"name": "Triggered By", "value": "{{ data.workflow_run.triggering_actor.login if data.workflow_run and data.workflow_run.triggering_actor else (data.sender.login if data.sender else 'System') }}", "inline": true},
-        {"name": "Status", "value": "✅ Sukses (Live)", "inline": true}
+        {"name": "Repository", "value": {{ data.repository.full_name | tojson }}, "inline": true},
+        {"name": "Triggered By", "value": {{ trigger_actor | tojson }}, "inline": true},
+        {"name": "Docs Status", "value": "✅ Live & Available", "inline": true}
       ],
       "footer": {
         "text": "Nexo Documentation Service • KSM AIoT"
       }
+    }
+  ],
+  "components": [
+    {
+      "type": 1,
+      "components": [
+        {
+          "type": 2,
+          "style": 5,
+          "label": "View Documentation",
+          "url": {{ (target_url | string) | tojson }},
+          "emoji": {
+            "name": "📖"
+          }
+        },
+        {
+          "type": 2,
+          "style": 5,
+          "label": "Repository",
+          "url": {{ (data.repository.html_url | string) | tojson }},
+          "emoji": {
+            "name": "📂"
+          }
+        }
+      ]
     }
   ]
 }

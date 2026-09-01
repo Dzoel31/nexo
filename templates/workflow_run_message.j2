@@ -1,40 +1,59 @@
+{% set status_icon = "✅" if data.workflow_run.conclusion == "success" else ("❌" if data.workflow_run.conclusion == "failure" else "⏳") %}
+{% set content_text = status_icon ~ " **GitHub Actions:** `" ~ data.workflow_run.name ~ "` (" ~ (data.workflow_run.conclusion or data.workflow_run.status) ~ ")\nRepo: **" ~ data.repository.full_name ~ "**" ~ ("\n<@&" ~ config.discord_role_id ~ ">" if config.discord_role_id else "") %}
+{% set actor_name = data.workflow_run.triggering_actor.login if data.workflow_run and data.workflow_run.triggering_actor else (data.sender.login if data.sender else 'System') %}
+{% set actor_avatar = data.workflow_run.triggering_actor.avatar_url if data.workflow_run and data.workflow_run.triggering_actor else (data.sender.avatar_url if data.sender else '') %}
+{% set commit_info = data.workflow_run.head_commit.message if data.workflow_run and data.workflow_run.head_commit else (data.workflow_run.display_title if data.workflow_run else '-') %}
+{% set desc_text = "Workflow **" ~ data.workflow_run.name ~ "** is **" ~ (data.workflow_run.conclusion or data.workflow_run.status) ~ "**.\n\n**📝 Commit / Trigger:**\n```text\n" ~ (commit_info | compact_markdown | truncate(1000)) ~ "\n```" %}
 {
-  "content": "🚀 **GitHub Workflow Run Notification**\nRepo: **{{ data.repository.full_name }}** | Workflow: `{{ data.workflow_run.name }}`\n\n {{ data.workflow_run.head_commit.message | replace('\r', '') | replace('\n\n', '\n') | replace('\n', '\\n') | replace('\"', '\\\"') | truncate(1000) }}",
+  "content": {{ content_text | tojson }},
   "embeds": [
     {
-      "title": "🚀 New Workflow Run in {{ data.repository.full_name }}",
-      "url": "{{ data.workflow_run.html_url }}",
-      "description": "Workflow Run **{{ data.workflow_run.name }}** has been **{{ data.workflow_run.conclusion if data.workflow_run.conclusion else data.workflow_run.status }}**.\n\n**Triggered by:** {{ data.workflow_run.triggering_actor.login }}",
-      "color": 
-      {% if data.action == "completed" and data.workflow_run.conclusion == "success" %}
-      4437377 {# Neon Green #}
-      {% elif data.action == "completed" and data.workflow_run.conclusion == "failure" %}
-      15158332 {# Crimson Red #}
-      {% elif data.action == 'in_progress'%}
-      15844367 {# Kuning #}
-      {% elif data.workflow_run.conclusion == "cancelled" %}
-      9807270 {# gray #}
-      {% else %}
-      2899536 {# default color (dark gray) #}
-      {% endif %}
-      ,
+      "title": {{ ("⚡ " ~ data.workflow_run.name ~ " #" ~ data.workflow_run.run_number ~ " (" ~ data.repository.name ~ ")") | tojson }},
+      "url": {{ (data.workflow_run.html_url | string) | tojson }},
+      "description": {{ desc_text | tojson }},
+      "color": {% if data.action == "completed" and data.workflow_run.conclusion == "success" %}4437377{% elif data.action == "completed" and data.workflow_run.conclusion == "failure" %}15158332{% elif data.action == 'in_progress'%}15844367{% elif data.workflow_run.conclusion == "cancelled" %}9807270{% else %}2899536{% endif %},
       "author": {
-        "name": "{{ data.workflow_run.triggering_actor.login }}",
-        "icon_url": "{{ data.workflow_run.triggering_actor.avatar_url }}" 
+        "name": {{ actor_name | tojson }},
+        "icon_url": {{ (actor_avatar | string) | tojson }}
       },
       "fields": [
-        {"name": "Repo", "value": "{{ data.repository.full_name }}", "inline": true},
-        {"name": "Date", "value": "{{ data.workflow_run.created_at }}", "inline": true},
-        {"name": "Number", "value": "#{{ data.workflow_run.run_number }}", "inline": true},
-        {"name": "Status", "value": "{{ data.workflow_run.status }}", "inline": true},
-        {"name": "Branch", "value": "{{ data.workflow_run.head_branch }}", "inline": true},
-        {"name": "Author", "value": "{{ data.workflow_run.triggering_actor.login }}", "inline": true}
+        {"name": "Repository", "value": {{ data.repository.full_name | tojson }}, "inline": true},
+        {"name": "Branch / Ref", "value": {{ ("`" ~ (data.workflow_run.head_branch or '-') ~ "`") | tojson }}, "inline": true},
+        {"name": "Run Number", "value": {{ ("#" ~ data.workflow_run.run_number) | tojson }}, "inline": true},
+        {"name": "Status", "value": {{ (data.workflow_run.status | capitalize) | tojson }}, "inline": true},
+        {"name": "Conclusion", "value": {{ ((data.workflow_run.conclusion or 'In progress') | capitalize) | tojson }}, "inline": true},
+        {"name": "Triggered By", "value": {{ actor_name | tojson }}, "inline": true}
       ],
-      "thumbnail": {"url": "{{ data.workflow_run.triggering_actor.avatar_url }}?s=64"},
+      "thumbnail": {"url": {{ ((actor_avatar ~ "?s=64") if actor_avatar else '') | tojson }}},
       "footer": {
-        "text": "Workflow notification"
+        "text": "Nexo CI/CD Pipeline • KSM AIoT"
       },
-      "timestamp": "{{ data.workflow_run.updated_at | default('') }}"
+      "timestamp": {{ (data.workflow_run.updated_at | default('') | string) | tojson }}
+    }
+  ],
+  "components": [
+    {
+      "type": 1,
+      "components": [
+        {
+          "type": 2,
+          "style": 5,
+          "label": "View Run Logs",
+          "url": {{ (data.workflow_run.html_url | string) | tojson }},
+          "emoji": {
+            "name": "📜"
+          }
+        },
+        {
+          "type": 2,
+          "style": 5,
+          "label": "Workflow File",
+          "url": {{ (data.repository.html_url ~ "/blob/" ~ (data.workflow_run.head_branch or 'main') ~ "/" ~ (data.workflow_run.path or '')) | tojson }},
+          "emoji": {
+            "name": "⚙️"
+          }
+        }
+      ]
     }
   ]
 }

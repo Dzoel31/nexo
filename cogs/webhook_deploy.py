@@ -97,6 +97,28 @@ def truncate_output(text: str, limit: int = 1800) -> str:
     return text[: limit - 50] + "\n... (truncated) ..."
 
 
+def build_discord_view_from_components(
+    components_data: List[dict[str, Any]],
+) -> discord.ui.View | None:
+    """Constructs a discord.ui.View with Link Buttons from JSON component definitions."""
+    if not components_data:
+        return None
+    view = discord.ui.View()
+    for row in components_data:
+        for comp in row.get("components", []):
+            if comp.get("type") == 2 and comp.get("style") == 5:
+                emoji_val = None
+                if comp.get("emoji") and isinstance(comp["emoji"], dict):
+                    emoji_val = comp["emoji"].get("name")
+                btn = discord.ui.Button(
+                    label=comp.get("label", "Link"),
+                    url=comp.get("url"),
+                    emoji=emoji_val,
+                )
+                view.add_item(btn)
+    return view if len(view.children) > 0 else None
+
+
 class WebhookDeployCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
@@ -106,6 +128,9 @@ class WebhookDeployCog(commands.Cog):
         self, payload: dict[str, Any], target_channel_id: int | None = None
     ):
         """Send notification via webhook URL or bot text channel."""
+        components_data = payload.get("components", [])
+        view = build_discord_view_from_components(components_data)
+
         if target_channel_id:
             channel = self.bot.get_channel(target_channel_id)
             if channel:
@@ -120,7 +145,12 @@ class WebhookDeployCog(commands.Cog):
                     except Exception as e:
                         logger.error(f"Failed to parse embed dict: {e}")
 
-                await channel.send(content=content, embeds=discord_embeds)
+                if view:
+                    await channel.send(
+                        content=content, embeds=discord_embeds, view=view
+                    )
+                else:
+                    await channel.send(content=content, embeds=discord_embeds)
                 return
             else:
                 logger.warning(
@@ -161,7 +191,12 @@ class WebhookDeployCog(commands.Cog):
                     except Exception as e:
                         logger.error(f"Failed to parse embed dict: {e}")
 
-                await channel.send(content=content, embeds=discord_embeds)
+                if view:
+                    await channel.send(
+                        content=content, embeds=discord_embeds, view=view
+                    )
+                else:
+                    await channel.send(content=content, embeds=discord_embeds)
             else:
                 logger.warning(f"Could not find Discord channel with ID {channel_id}")
         else:

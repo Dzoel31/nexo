@@ -77,21 +77,21 @@ class PushSchema(BaseModel):
     deleted: bool
     forced: bool
     compare: HttpUrl
-    commits: List[Commit]
-    head_commit: Commit
+    commits: List[Commit] = []
+    head_commit: Optional[Commit] = None
 
 
 class Branch(BaseModel):
-    label: str
-    ref: str
-    sha: str
-    user: User
-    repo: Repository
+    label: Optional[str] = None
+    ref: Optional[str] = None
+    sha: Optional[str] = None
+    user: Optional[User] = None
+    repo: Optional[Repository] = None
 
 
 class PullRequest(BaseModel):
     html_url: HttpUrl
-    issue_url: HttpUrl
+    issue_url: Optional[HttpUrl] = None
     number: int
     state: str
     title: str
@@ -102,10 +102,10 @@ class PullRequest(BaseModel):
     closed_at: Optional[str] = None
     merged_at: Optional[str] = None
     merge_commit_sha: Optional[str] = None
-    commits: int
-    additions: int
-    deletions: int
-    changed_files: int
+    commits: Optional[int] = 0
+    additions: Optional[int] = 0
+    deletions: Optional[int] = 0
+    changed_files: Optional[int] = 0
     head: Branch
     base: Branch
 
@@ -144,17 +144,17 @@ class HeadCommit(BaseModel):
     id: str
     message: str
     timestamp: str
-    author: Account
-    committer: Account
+    author: Optional[Account] = None
+    committer: Optional[Account] = None
 
 
 class WorkflowRun(BaseModel):
     id: int
     name: str
-    head_branch: str
-    head_sha: str
-    path: str
-    display_title: str
+    head_branch: Optional[str] = None
+    head_sha: Optional[str] = None
+    path: Optional[str] = None
+    display_title: Optional[str] = None
     run_number: int
     event: str
     status: str
@@ -162,20 +162,20 @@ class WorkflowRun(BaseModel):
     html_url: HttpUrl
     created_at: str
     updated_at: str
-    triggering_actor: User
-    head_commit: HeadCommit
-    actor: User
+    triggering_actor: Optional[User] = None
+    head_commit: Optional[HeadCommit] = None
+    actor: Optional[User] = None
 
 
 class Workflow(BaseModel):
     id: int
     name: str
-    state: str
+    state: Optional[str] = None
 
 
 class WorkflowSchema(BaseModel):
     action: str
     workflow_run: WorkflowRun
-    workflow: Workflow
+    workflow: Optional[Workflow] = None
     repository: Repository
     sender: User

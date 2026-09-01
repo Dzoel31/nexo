@@ -77,3 +77,59 @@ def test_template_rendering():
     )
     assert "PENGINGAT ACARA: 30 Menit Lagi!" in rendered_reminder
     assert "@everyone" in rendered_reminder
+
+
+def test_webhook_release_template_json_rendering():
+    import json
+    from jinja2 import Environment, FileSystemLoader
+    from utils.webhook_schemas import ReleaseSchema
+
+    from utils.gateway_server import compact_markdown
+
+    env = Environment(loader=FileSystemLoader("templates"), autoescape=False)
+    env.filters["compact_markdown"] = compact_markdown
+    template = env.get_template("release_message.j2")
+
+    user_mock = {
+        "login": "github-actions[bot]",
+        "id": 12345,
+        "avatar_url": "https://avatars.githubusercontent.com/in/15368?v=4",
+        "html_url": "https://github.com/apps/github-actions",
+    }
+    sample_release = {
+        "action": "released",
+        "release": {
+            "url": "https://api.github.com/repos/ksm-aiot-upnvj/nexo/releases/123",
+            "html_url": "https://github.com/ksm-aiot-upnvj/nexo/releases/tag/1.9.0",
+            "id": 123456,
+            "author": user_mock,
+            "tag_name": "1.9.0",
+            "name": "1.9.0",
+            "draft": False,
+            "prerelease": False,
+            "created_at": "2026-09-01T06:45:00Z",
+            "updated_at": "2026-09-01T06:45:00Z",
+            "published_at": "2026-09-01T06:45:00Z",
+            "body": "## 1.9.0 (2026-09-01)\n\n* **feat:** quote \"test\" & \\backslashes\\ and code:\n```python\nprint('hello')\n```",
+        },
+        "repository": {
+            "name": "nexo",
+            "full_name": "ksm-aiot-upnvj/nexo",
+            "private": False,
+            "html_url": "https://github.com/ksm-aiot-upnvj/nexo",
+            "owner": user_mock,
+        },
+        "sender": user_mock,
+    }
+    model = ReleaseSchema(**sample_release)
+    config = {"discord_channel_id": 123456, "discord_role_id": None}
+
+    rendered = template.render(data=model, config=config)
+    parsed = json.loads(rendered)
+    assert "content" in parsed
+    assert "embeds" in parsed
+    assert len(parsed["embeds"]) == 1
+    assert (
+        "1.9.0" in parsed["embeds"][0]["title"]
+        or "nexo" in parsed["embeds"][0]["title"]
+    )
