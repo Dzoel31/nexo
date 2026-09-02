@@ -18,10 +18,12 @@ services:
       - LLAMA_SERVER_URL
       - LLAMA_TOKENIZE_URL
       - MCP_SERVER_URL
+      - GOOGLE_SERVICE_ACCOUNT_FILE
+      - GOOGLE_CALENDAR_ID
     volumes:
       - ./prompts:/app/prompts
       - ./data:/app/data
-      - /var/run/docker.sock:/var/run/docker.sock
+      - /home/admin-iot-hydroponik/ksm-aiot/credentials:/app/credentials:ro
       - /home/admin-iot-hydroponik/ksm-aiot:/home/admin-iot-hydroponik/ksm-aiot:ro
 
     deploy:

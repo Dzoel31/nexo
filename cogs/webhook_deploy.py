@@ -1,69 +1,38 @@
-import os
+import asyncio
 import json
 import logging
-import asyncio
-import subprocess  # nosec B404
+import os
 from pathlib import Path
-from typing import Any, List, Union
+from typing import Any, List
 import aiohttp
 import discord
 from discord.ext import commands
-from utils.webhook_schemas import DockerServiceSchema
 
 logger = logging.getLogger("cogs.webhook_deploy")
 
 
-def resolve_path(value: str) -> Path | None:
-    if not value:
-        return None
-    return Path(value).expanduser()
-
-
-def parse_compose_paths(raw_paths: str) -> dict[str, Path]:
-    compose_paths: dict[str, Path] = {}
-    if not raw_paths:
-        return compose_paths
-
-    raw_paths = raw_paths.strip()
-    if not raw_paths:
-        return compose_paths
-
-    if raw_paths.startswith("{"):
-        try:
-            parsed = json.loads(raw_paths)
-            if isinstance(parsed, dict):
-                for k, v in parsed.items():
-                    res = resolve_path(str(v))
-                    if res:
-                        compose_paths[str(k)] = res
-        except json.JSONDecodeError:
-            logger.warning("Failed to parse DOCKER_COMPOSE_PATHS as JSON")
-        return compose_paths
-
-    for entry in raw_paths.split(";"):
-        entry = entry.strip()
-        if not entry or "=" not in entry:
-            continue
-        repo_key, path_val = entry.split("=", 1)
-        repo_key = repo_key.strip()
-        path_val = path_val.strip()
-        if repo_key and path_val:
-            res = resolve_path(path_val)
-            if res:
-                compose_paths[repo_key] = res
-
-    return compose_paths
-
-
-def build_project_paths() -> tuple[dict[str, Path], dict[str, str]]:
-    raw = os.environ.get("DOCKER_COMPOSE_PATHS", "")
-    paths = parse_compose_paths(raw)
+def build_portainer_webhooks() -> dict[str, str]:
+    """Reads Portainer webhook URLs from config/projects.json and environment variables."""
     portainer_webhooks: dict[str, str] = {}
 
-    backend = resolve_path(os.environ.get("PATH_BACKEND_HYDROPONIC", ""))
-    if backend:
-        paths.setdefault("smart-hydroponic-backend", backend)
+    # 1. Read from environment variable PORTAINER_WEBHOOKS (json format or semicolon separated)
+    raw_env = os.environ.get("PORTAINER_WEBHOOKS", "").strip()
+    if raw_env:
+        if raw_env.startswith("{"):
+            try:
+                parsed = json.loads(raw_env)
+                if isinstance(parsed, dict):
+                    for k, v in parsed.items():
+                        portainer_webhooks[str(k)] = str(v).strip()
+            except json.JSONDecodeError:
+                logger.warning("Failed to parse PORTAINER_WEBHOOKS as JSON")
+        else:
+            for entry in raw_env.split(";"):
+                if "=" in entry:
+                    k, v = entry.split("=", 1)
+                    portainer_webhooks[k.strip()] = v.strip()
 
+    # 2. Read from config/projects.json
     projects_config_path = Path("config/projects.json")
     if projects_config_path.exists():
         try:
@@ -73,22 +42,17 @@ def build_project_paths() -> tuple[dict[str, Path], dict[str, str]]:
                     for repo_key, cfg in projects_data.items():
                         if isinstance(cfg, dict):
                             short_name = repo_key.split("/")[-1]
-                            if cfg.get("deploy_path"):
-                                res = resolve_path(str(cfg["deploy_path"]))
-                                if res:
-                                    paths.setdefault(repo_key, res)
-                                    paths.setdefault(short_name, res)
-                            if cfg.get("portainer_webhook_url"):
-                                p_url = str(cfg["portainer_webhook_url"]).strip()
-                                if p_url:
-                                    portainer_webhooks[repo_key] = p_url
-                                    portainer_webhooks[short_name] = p_url
+                            p_url = cfg.get("portainer_webhook_url")
+                            if p_url:
+                                url_clean = str(p_url).strip()
+                                portainer_webhooks[repo_key] = url_clean
+                                portainer_webhooks[short_name] = url_clean
         except Exception as err:
             logger.warning(
                 f"Could not read deploy config from config/projects.json: {err}"
             )
 
-    return paths, portainer_webhooks
+    return portainer_webhooks
 
 
 def truncate_output(text: str, limit: int = 1800) -> str:
@@ -122,7 +86,7 @@ def build_discord_view_from_components(
 class WebhookDeployCog(commands.Cog):
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.project_paths, self.portainer_webhooks = build_project_paths()
+        self.portainer_webhooks = build_portainer_webhooks()
 
     async def send_discord_notification(
         self, payload: dict[str, Any], target_channel_id: int | None = None
@@ -204,120 +168,6 @@ class WebhookDeployCog(commands.Cog):
                 "No WEBHOOK_DEVLOGS_CHANNEL or WEBHOOK_DEVLOGS_CHANNEL_ID configured."
             )
 
-    async def run_command_async(
-        self, cmd: List[str], work_dir: Path
-    ) -> tuple[int, str]:
-        def _exec():
-            # Executed safely with fixed list args and no shell expansion
-            exec_cmd = list(cmd)
-            actual_cwd = None
-
-            if work_dir and work_dir.exists():
-                actual_cwd = str(work_dir)
-            elif work_dir:
-                # If work_dir is a host VPS path not mounted in container, pass -f docker-compose.yml to docker compose
-                compose_file = work_dir / "docker-compose.yml"
-                if (
-                    len(exec_cmd) >= 2
-                    and exec_cmd[0] == "docker"
-                    and exec_cmd[1] == "compose"
-                ):
-                    exec_cmd = [
-                        "docker",
-                        "compose",
-                        "-f",
-                        str(compose_file),
-                    ] + exec_cmd[2:]
-                # Check fallback directory in container (/app)
-                if Path("/app").exists():
-                    actual_cwd = "/app"
-
-            try:
-                result = subprocess.run(  # nosec B603
-                    exec_cmd,
-                    cwd=actual_cwd,
-                    capture_output=True,
-                    text=True,
-                    timeout=300,
-                    check=False,
-                )
-                combined = "\n".join(
-                    line
-                    for line in [result.stdout.strip(), result.stderr.strip()]
-                    if line
-                )
-                return result.returncode, combined
-            except FileNotFoundError:
-                return (
-                    127,
-                    f"Command '{exec_cmd[0]}' tidak ditemukan di container. "
-                    "Pastikan Docker CLI terpasang atau gunakan Portainer Webhook.",
-                )
-
-        return await asyncio.to_thread(_exec)
-
-    async def list_compose_services(self, work_dir: Path) -> List[DockerServiceSchema]:
-        code, raw = await self.run_command_async(
-            ["docker", "compose", "ps", "--format", "json"], work_dir
-        )
-        services: List[DockerServiceSchema] = []
-        for line in raw.splitlines():
-            json_start = line.find("{")
-            if json_start == -1:
-                continue
-            try:
-                service_info = json.loads(line[json_start:])
-                services.append(DockerServiceSchema(**service_info))
-            except (json.JSONDecodeError, ValueError) as err:
-                logger.debug(f"Could not parse docker service line: {err}")
-        return services
-
-    async def compose_status_summary(
-        self, work_dir: Path
-    ) -> Union[List[dict[str, Any]], str]:
-        max_retries = 12
-        interval = 5
-        final_status: List[DockerServiceSchema] = []
-
-        for _ in range(max_retries):
-            current_services = await self.list_compose_services(work_dir)
-            pending = [
-                s
-                for s in current_services
-                if "starting" in s.status.lower() or "unhealthy" in s.status.lower()
-            ]
-            if not pending and current_services:
-                final_status = current_services
-                break
-            await asyncio.sleep(interval)
-
-        if not final_status:
-            final_status = await self.list_compose_services(work_dir)
-
-        if not final_status:
-            return "No container statuses reported."
-
-        embeds: List[dict[str, Any]] = []
-        for service in final_status:
-            embeds.append(
-                {
-                    "title": f"🐳 Service: {service.name} | ID: {service.id}",
-                    "color": service.get_color(),
-                    "fields": [
-                        {"name": "Status", "value": service.status, "inline": True},
-                        {"name": "State", "value": service.state, "inline": True},
-                        {"name": "Image", "value": service.image, "inline": False},
-                        {
-                            "name": "Created",
-                            "value": service.createdAt,
-                            "inline": False,
-                        },
-                    ],
-                }
-            )
-
-        return embeds
-
     async def trigger_portainer_webhook(
         self,
         webhook_url: str,
@@ -337,7 +187,6 @@ class WebhookDeployCog(commands.Cog):
             await self.send_discord_notification(
                 pre_payload, target_channel_id=target_channel_id
             )
-            # Beri jeda 2 detik agar pesan Discord terkirim tuntas sebelum kontainer di-restart
             await asyncio.sleep(2)
 
         try:
@@ -400,11 +249,13 @@ class WebhookDeployCog(commands.Cog):
         target_channel_id: int | None = None,
         announcement_payload: dict[str, Any] | None = None,
     ):
-        self.project_paths, self.portainer_webhooks = build_project_paths()
+        """Standardized deployment dispatcher using Portainer Webhooks."""
+        self.portainer_webhooks = build_portainer_webhooks()
         target_display = repo_name or repo_key
 
-        # 1. Cek apakah project menggunakan Portainer Webhook URL
-        portainer_url = self.portainer_webhooks.get(repo_key)
+        portainer_url = self.portainer_webhooks.get(
+            repo_key
+        ) or self.portainer_webhooks.get(target_display)
         if portainer_url:
             await self.trigger_portainer_webhook(
                 webhook_url=portainer_url,
@@ -414,104 +265,24 @@ class WebhookDeployCog(commands.Cog):
             )
             return
 
-        # 2. Direct Docker Compose CLI
-        work_dir = self.project_paths.get(repo_key)
-        if not work_dir:
-            logger.warning(
-                f"No Docker compose path or Portainer webhook configured for repo={repo_key}. Skipping deployment."
-            )
-            return
-
-        is_self_update = "nexo" in target_display.lower()
-
         logger.info(
-            f"Triggering async Docker compose deployment for {target_display} at {work_dir}"
+            f"No Portainer webhook configured for repo={repo_key}. Broadcasting release announcement directly."
         )
-
-        try:
-            # If self-updating Nexo, send a pre-notification first before container restarts
-            if is_self_update:
-                pre_payload = {
-                    "content": (
-                        f"🔄 **Self-Update Initiated for {target_display}**\n"
-                        f"Menarik image terbaru dan me-recreate kontainer Nexo dalam 5 detik..."
-                    ),
-                }
-                await self.send_discord_notification(
-                    pre_payload, target_channel_id=target_channel_id
-                )
-                await asyncio.sleep(5)
-
-            # 1. Pull
-            code_pull, out_pull = await self.run_command_async(
-                ["docker", "compose", "pull"], work_dir
-            )
-            if code_pull != 0:
-                raise RuntimeError(f"docker compose pull failed: {out_pull}")
-
-            # 2. Up -d
-            code_up, out_up = await self.run_command_async(
-                ["docker", "compose", "up", "-d"], work_dir
-            )
-            if code_up != 0:
-                raise RuntimeError(f"docker compose up -d failed: {out_up}")
-
-            # 3. Prune -f
-            await self.run_command_async(["docker", "image", "prune", "-f"], work_dir)
-
-            # 4. Status Summary
-            status_output = await self.compose_status_summary(work_dir)
-            out_up_clean = out_up.strip()
-
-            payload = {
-                "content": (
-                    f"🧰 Docker Compose Deployment Status for **{target_display}**:\n"
-                    f"```bash\n{out_up_clean}\n```"
-                ),
-            }
-
-            if isinstance(status_output, list):
-                payload["embeds"] = status_output
-            else:
-                payload["content"] += f"\n```\n{status_output}\n```"
-
+        if announcement_payload:
             await self.send_discord_notification(
-                payload, target_channel_id=target_channel_id
+                announcement_payload, target_channel_id=target_channel_id
             )
-            logger.info(f"Docker compose deployment completed for {target_display}")
-
-            # 5. Send Rich CD Release Announcement after successful VPS Deployment
-            if announcement_payload:
+            release_notes_channel_id = int(
+                os.environ.get("WEBHOOK_RELEASE_NOTES_CHANNEL_ID", 0) or 0
+            )
+            if (
+                release_notes_channel_id
+                and release_notes_channel_id != target_channel_id
+            ):
                 await self.send_discord_notification(
-                    announcement_payload, target_channel_id=target_channel_id
+                    announcement_payload,
+                    target_channel_id=release_notes_channel_id,
                 )
-
-                # Broadcast to global #release-notes channel
-                release_notes_channel_id = int(
-                    os.environ.get("WEBHOOK_RELEASE_NOTES_CHANNEL_ID", 0) or 0
-                )
-                if (
-                    release_notes_channel_id
-                    and release_notes_channel_id != target_channel_id
-                ):
-                    await self.send_discord_notification(
-                        announcement_payload,
-                        target_channel_id=release_notes_channel_id,
-                    )
-
-        except Exception as e:
-            err_msg = truncate_output(str(e))
-            logger.error(f"Docker compose deployment failed: {err_msg}")
-            fail_payload = {
-                "content": (
-                    f"❌ **Deploy Failed**\n"
-                    f"Repo: **{target_display}**\n"
-                    f"```\n{err_msg}\n```"
-                ),
-            }
-            await self.send_discord_notification(
-                fail_payload, target_channel_id=target_channel_id
-            )
 
 
 async def setup(bot):
