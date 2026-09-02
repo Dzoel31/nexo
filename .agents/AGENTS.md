@@ -35,3 +35,7 @@ Kumpulan aturan ini akan otomatis dimuat oleh AI (Nexo / sistem) setiap kali bek
 ## 6. Linting & Formatting (Wajib)
 - **AI (Nexo) WAJIB** menjalankan proses *linting* dan *formatting* menggunakan `ruff` (`uv run ruff check --fix .` dan `uv run ruff format .`) setiap kali selesai menulis atau mengubah kode Python jika dibutuhkan (perubahan besar).
 - AI tidak boleh berhenti memperbaiki kode sebelum memastikan kode tersebut lolos uji *linter* (status *checked* atau *passed*), dan harus secara proaktif menangani error yang muncul akibat perubahannya.
+
+## 7. Aturan Git & Commit (Ketat)
+- **DILARANG KERAS** melakukan `git commit` atau `git push` tanpa instruksi eksplisit dan langsung dari pengguna.
+- Agen hanya diperbolehkan memodifikasi file, menjalankan pengujian (*tests*), dan *linting*. Jangan pernah membuat commit otomatis/mandiri sampai disuruh secara tegas oleh pengguna.

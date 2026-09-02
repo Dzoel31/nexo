@@ -90,30 +90,39 @@ Berdasarkan pertimbangan perangkat keras (4 Core CPU, sisa RAM 5 GB), pengembang
 **INGRESS & GATEWAY**
 - [x] Setup endpoint GitHub Webhooks dengan FastAPI (`utils/gateway_server.py`).
 - [x] Implementasi *Pydantic Schema* (`utils/webhook_schemas.py`) untuk parsing payload GitHub dan *Jinja Templating* (`templates/*.j2`) untuk notifikasi Discord.
+- [x] Modernisasi *Webhook Embed Templates* dengan *Discord Action Link Buttons* & filter `compact_markdown` untuk merapatkan gap teks.
 - [x] Implementasi sistem *Auto-Deploy* (menjalankan sintaks shell `docker compose pull`, `up -d`, `prune -f` berdasarkan payload).
 - [x] Implementasi HMAC Webhook Signature (`verify_signature`), Deduplication, & Guardrails.
 
 **AGENT & INFERENCE**
 - [x] Buat *Context & Date Resolver* (Pydantic & Dynamic System Context).
-- [ ] Rombak *in-memory history* menjadi modul Database dengan sistem *Rolling Summaries* (merangkum percakapan usang agar hemat token).
+- [x] Rombak *in-memory history* menjadi modul Database PostgreSQL *async* dengan sistem *Rolling Summaries* & *24-Hour Sliding TTL Expiration* (`db/repository.py`).
 - [x] Validasi *context length* maksimal 8,192 token sebelum request dikirim ke llama-server (dengan batasan karakter & rolling history limit).
+- [x] Implementasi **Multi-Hop & Multi-Tool Calling Loop** (iterative max 3 iterations dengan sanitasi skema).
+- [x] Implementasi **Pydantic Token-Efficient Schema Cleaner** (`get_clean_schema`) untuk membuang metadata `$defs` dan `title` agar menghemat token prompt.
+- [x] Protokol *Anti-Chatter Direct Tool Calling* di System Prompt Nexo.
 - [ ] Pembuatan knowledge base *Datasheet Perangkat IoT* dan *Modul Ajar* (chunking PDF dokumen AIoT ke dalam `pgvector`).
 - [ ] *(Low Priority)* Implementasi **Streaming Responses** (`stream=True`). **Catatan:** Berisiko tinggi memicu *Rate Limit* Discord, sehingga bukan prioritas utama saat ini.
 - [ ] Implementasi **Semantic Tool Routing (Tool Retrieval / RAG Router)**. Mencegah penuhnya *context window* dengan cara memfilter dan hanya memasukkan skema/deskripsi *tools* MCP yang relevan (menggunakan *vector search*) ke dalam *system prompt*.
 - [ ] Tambahkan **Robust Error Handling (Exponential Backoff)** menggunakan library `tenacity` saat berkomunikasi dengan LLM atau MCP.
 
 **TOOL EXECUTOR & DB (CORE)**
-- [x] Integrasi Pydantic untuk validasi skema input/output *tool* (`DiscordEventSchema`, `CheckVoiceChannelSchema`, dll).
-- [ ] Tambah *Audit Logging* (catat *user ID* dan *tool* yang dipakai).
-- [ ] Setup koneksi PostgreSQL *async* & buat tabel utama (`mcp_tools`, `knowledge_base`, `thread_conversations`, `webhook_mappings`, `audit_logs`, `member_points`, `lab_inventory`).
-- [ ] Implementasi **Parallel Tool Execution** menggunakan `asyncio.gather` agar eksekusi *multiple-tools* berjalan serentak.
-- [ ] Pembuatan dasbor/sistem **Observability & Token Metrics** untuk mencatat statistik penggunaan token LLM dan frekuensi pemakaian tool per *member*.
+- [x] Integrasi Pydantic untuk validasi skema input/output *tool* (`DiscordEventSchema`, `CheckVoiceChannelSchema`, `ListDiscordEventsSchema`, `EndDiscordEventSchema`, dll).
+- [x] Setup koneksi PostgreSQL *async* (`SQLAlchemy 2.0` + `asyncpg` + `Alembic`) & buat tabel utama (`conversations`, `messages`, `scheduled_events`, `token_usage`, `token_cache`).
+- [x] Sistem **Token Cache LRU** (MD5 prompt hash) & **Observability Token Metrics** (pencatatan token per guild/user dan leaderboard pemakaian).
+- [x] Tambah *Audit & Execution Logging* dengan format timestamp ISO standar.
+- [ ] Implementasi **Parallel Tool Execution** menggunakan `asyncio.gather` saat model mengeluarkan lebih dari satu tool call serentak.
 
 **DISCORD COGS & USER FEATURES**
 - [x] Pembuatan Cog *Community*: Sistem Onboarding (auto-role & welcome message) dan Absensi Voice Channel (`check_voice_channel`, `$vc`, `/voice`).
 - [x] Pembuatan Cog *Utilities*: Polling dinamis (`create_discord_poll`), Manajemen *Discord Threads* (pembuatan & auto-archive), dan Perintah Reset Konteks Memori (`$reset`, `/reset`).
 - [x] Pembuatan Cog *Webhook & Deployment*: FastAPI Gateway (`/webhook`), Jinja2 embed notification, dan otomatisasi Docker Compose Deployment (`cogs/webhook_deploy.py`).
-- [ ] Pembuatan Cog *Scheduler*: Sinkronisasi kalender dan *blast* pengingat rapat (`discord.ext.tasks`).
+- [x] Pembuatan Cog *Scheduler & Events Lifecycle*:
+  - [x] Manajemen siklus hidup event Discord berbasis database (`manage_event_lifecycle` loop).
+  - [x] Dynamic interval reminder scheduler (H-7d hingga H-10m) dengan filter duplikasi.
+  - [x] Dynamic LLM One-Shot Copywriting (`generate_dynamic_event_message`) dengan timeout 120s dan fallback Jinja2.
+  - [x] Tool `list_discord_events` (output markdown padat token dalam zona waktu WIB).
+  - [x] Tool `end_discord_event` dengan 3-tier target resolution & Discord lifecycle state machine.
 - [ ] Pembuatan Cog *Lab Assistant*: *Tool* untuk query Inventaris Lab IoT dan monitoring status Sensor (*Snapshot* suhu/kelembaban).
 - [ ] (Future) Pembuatan *tool* eksekusi fisik (contoh: MQTT *publish* ke relay ESP32) berserta *role permission checker*.
 
