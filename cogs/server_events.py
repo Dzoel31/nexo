@@ -13,10 +13,13 @@ from sqlalchemy.orm.attributes import flag_modified
 from db.models import ScheduledEvent
 from db.session import async_session
 from utils.event_manager import (
+    build_reminder_embed,
+    detect_event_type,
     format_indonesian_date,
     format_time_wib,
-    get_human_time_label,
+    generate_dynamic_event_message,
     prune_reminder_intervals,
+    to_wib,
 )
 from utils.schemas import (
     CheckVoiceChannelSchema,
@@ -28,8 +31,12 @@ from utils.schemas import (
     EndDiscordPollSchema,
     GetServerChannelsSchema,
     GetServerRolesSchema,
+    ListDiscordEventsSchema,
+    get_clean_schema,
 )
 from utils.template_renderer import render_event_template
+from utils.gcal_manager import create_gcal_event, delete_gcal_event, list_gcal_events
+from utils.auth_helper import has_permission
 
 logger = logging.getLogger("server_events")
 
@@ -37,10 +44,13 @@ logger = logging.getLogger("server_events")
 class ServerEvents(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self._reminded_cache: set[tuple[int, int]] = set()
         self.reminder_loop.start()
+        self.sync_events_from_gcal.start()
 
     def cog_unload(self):
         self.reminder_loop.cancel()
+        self.sync_events_from_gcal.cancel()
 
     async def cog_load(self):
         # Initialize properties if they don't exist
@@ -55,6 +65,7 @@ class ServerEvents(commands.Cog):
             for t in self.bot.ai_tools
             if t.get("function", {}).get("name")
             not in [
+                "list_discord_events",
                 "create_discord_event",
                 "end_discord_event",
                 "create_discord_thread",
@@ -67,14 +78,26 @@ class ServerEvents(commands.Cog):
             ]
         ]
 
-        # 1. Register Pydantic tool schemas to bot memory
+        # 1. Register Pydantic tool schemas to bot memory using token-efficient clean schemas
+        self.bot.ai_tools.append(
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_discord_events",
+                    "description": "List scheduled and active events on the server.",
+                    "parameters": get_clean_schema(ListDiscordEventsSchema),
+                },
+            }
+        )
+        self.bot.local_tool_handlers["list_discord_events"] = self.list_events_handler
+
         self.bot.ai_tools.append(
             {
                 "type": "function",
                 "function": {
                     "name": "create_discord_event",
                     "description": "Schedule a new server event or meeting.",
-                    "parameters": DiscordEventSchema.model_json_schema(),
+                    "parameters": get_clean_schema(DiscordEventSchema),
                 },
             }
         )
@@ -86,7 +109,7 @@ class ServerEvents(commands.Cog):
                 "function": {
                     "name": "end_discord_event",
                     "description": "End, close, or stop a Discord Scheduled Event.",
-                    "parameters": EndDiscordEventSchema.model_json_schema(),
+                    "parameters": get_clean_schema(EndDiscordEventSchema),
                 },
             }
         )
@@ -98,7 +121,7 @@ class ServerEvents(commands.Cog):
                 "function": {
                     "name": "create_discord_thread",
                     "description": "Create a new thread in current channel.",
-                    "parameters": DiscordThreadSchema.model_json_schema(),
+                    "parameters": get_clean_schema(DiscordThreadSchema),
                 },
             }
         )
@@ -112,7 +135,7 @@ class ServerEvents(commands.Cog):
                 "function": {
                     "name": "create_discord_poll",
                     "description": "Create an interactive native poll.",
-                    "parameters": DiscordPollSchema.model_json_schema(),
+                    "parameters": get_clean_schema(DiscordPollSchema),
                 },
             }
         )
@@ -124,7 +147,7 @@ class ServerEvents(commands.Cog):
                 "function": {
                     "name": "end_discord_poll",
                     "description": "End an active poll and get final votes.",
-                    "parameters": EndDiscordPollSchema.model_json_schema(),
+                    "parameters": get_clean_schema(EndDiscordPollSchema),
                 },
             }
         )
@@ -136,7 +159,7 @@ class ServerEvents(commands.Cog):
                 "function": {
                     "name": "get_server_channels",
                     "description": "List all server text and voice channels.",
-                    "parameters": GetServerChannelsSchema.model_json_schema(),
+                    "parameters": get_clean_schema(GetServerChannelsSchema),
                 },
             }
         )
@@ -148,7 +171,7 @@ class ServerEvents(commands.Cog):
                 "function": {
                     "name": "get_server_roles",
                     "description": "List all server roles and IDs.",
-                    "parameters": GetServerRolesSchema.model_json_schema(),
+                    "parameters": get_clean_schema(GetServerRolesSchema),
                 },
             }
         )
@@ -160,7 +183,7 @@ class ServerEvents(commands.Cog):
                 "function": {
                     "name": "clear_messages",
                     "description": "Delete messages in bulk.",
-                    "parameters": ClearMessagesSchema.model_json_schema(),
+                    "parameters": get_clean_schema(ClearMessagesSchema),
                 },
             }
         )
@@ -172,7 +195,7 @@ class ServerEvents(commands.Cog):
                 "function": {
                     "name": "check_voice_channel",
                     "description": "List users in a voice channel.",
-                    "parameters": CheckVoiceChannelSchema.model_json_schema(),
+                    "parameters": get_clean_schema(CheckVoiceChannelSchema),
                 },
             }
         )
@@ -183,6 +206,21 @@ class ServerEvents(commands.Cog):
     async def create_event_handler(self, arguments: dict, ctx_obj=None) -> str:
         """Function called by the LLM brain when create_discord_event tool is used"""
         try:
+            if not has_permission(
+                ctx_obj,
+                "manage_events",
+                allowed_roles=[
+                    "Leader",
+                    "Co-Leader",
+                    "Staff-Core",
+                    "Head – Academic & Research",
+                    "Head – HRD",
+                    "Head – PR & Multimedia",
+                    "Admin",
+                ],
+            ):
+                return "❌ DITOLAK: Kamu tidak memiliki izin 'Manage Events' atau peran kepengurusan yang sesuai untuk membuat acara."
+
             # Strict validation using Pydantic
             event_data = DiscordEventSchema.model_validate(arguments)
 
@@ -235,6 +273,15 @@ class ServerEvents(commands.Cog):
                     privacy_level=discord.PrivacyLevel.guild_only,
                 )
                 loc_str = event_data.location
+
+            gcal_data = await create_gcal_event(
+                name=event_data.name,
+                description=event_data.description,
+                start_dt=start_dt,
+                end_dt=end_dt,
+                location=event_data.location,
+            )
+            gcal_id = gcal_data.get("id") if gcal_data else None
 
             event_url = f"https://discord.com/events/{guild.id}/{discord_event.id}"
 
@@ -310,13 +357,15 @@ class ServerEvents(commands.Cog):
                 except Exception as b_err:
                     logger.error(f"Failed to send initial event broadcast: {b_err}")
 
-            # Prune reminder intervals based on lead time
-            pruned_intervals = prune_reminder_intervals(start_dt)
+            # Detect event type (EVENT vs DEADLINE) and prune reminder intervals based on lead time
+            ev_type = detect_event_type(event_data.name)
+            pruned_intervals = prune_reminder_intervals(start_dt, event_type=ev_type)
 
             # Persist ScheduledEvent to PostgreSQL database
             async with async_session() as session:
                 db_event = ScheduledEvent(
                     id=discord_event.id,
+                    gcal_event_id=gcal_id,
                     guild_id=guild.id,
                     broadcast_channel_id=broadcast_channel.id
                     if broadcast_channel
@@ -353,10 +402,10 @@ class ServerEvents(commands.Cog):
             # Error can come from Pydantic (wrong format) or Discord API (400 Bad Request, past time, etc.)
             return f"❌ Failed to create event. Error: {str(e)} (If this is a 'Cannot schedule event in the past' error, it means you set the wrong time/date, make sure to set a future time)."
 
-    async def end_event_handler(self, arguments: dict, ctx_obj=None) -> str:
-        """Handler to end/stop a Discord Scheduled Event via tool calling"""
+    async def list_events_handler(self, arguments: dict, ctx_obj=None) -> str:
+        """Handler to list Discord Scheduled Events on the server (token-efficient)."""
         try:
-            req_data = EndDiscordEventSchema.model_validate(arguments)
+            req_data = ListDiscordEventsSchema.model_validate(arguments or {})
             if not self.bot.guilds:
                 return "❌ Failed: Bot is not currently in any server."
             guild = (
@@ -365,6 +414,73 @@ class ServerEvents(commands.Cog):
                 else self.bot.guilds[0]
             )
 
+            try:
+                events = await guild.fetch_scheduled_events()
+            except Exception as fetch_err:
+                logger.warning(
+                    f"Could not fetch scheduled events via API, fallback to cache: {fetch_err}"
+                )
+                events = list(guild.scheduled_events)
+
+            filter_mode = (req_data.status_filter or "all").lower().strip()
+            if filter_mode == "active":
+                events = [e for e in events if e.status == discord.EventStatus.active]
+            elif filter_mode == "scheduled":
+                events = [
+                    e for e in events if e.status == discord.EventStatus.scheduled
+                ]
+            elif filter_mode == "completed":
+                events = [
+                    e for e in events if e.status == discord.EventStatus.completed
+                ]
+            elif filter_mode in ("canceled", "cancelled"):
+                events = [e for e in events if e.status == discord.EventStatus.canceled]
+
+            if not events:
+                return "Tidak ada acara terjadwal di server saat ini."
+
+            lines = []
+            for e in events:
+                if e.status == discord.EventStatus.active:
+                    status_str = "ACTIVE"
+                elif e.status == discord.EventStatus.scheduled:
+                    status_str = "SCHEDULED"
+                elif e.status == discord.EventStatus.completed:
+                    status_str = "COMPLETED"
+                elif e.status == discord.EventStatus.canceled:
+                    status_str = "CANCELED"
+                else:
+                    status_str = str(e.status).upper()
+
+                dt_wib = to_wib(e.start_time)
+                time_str = dt_wib.strftime("%d %b %H:%M")
+                lines.append(f"- [{status_str}] {e.name} (ID: {e.id}) @ {time_str} WIB")
+
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error(f"Error in list_events_handler: {e}")
+            return f"❌ Gagal mengambil daftar acara: {str(e)}"
+
+    async def end_event_handler(self, arguments: dict, ctx_obj=None) -> str:
+        """Handler to end/stop a Discord Scheduled Event via tool calling with robust target resolution"""
+        try:
+            if not has_permission(
+                ctx_obj,
+                "manage_events",
+                allowed_roles=["Leader", "Co-Leader", "Staff-Core", "Admin"],
+            ):
+                return "❌ DITOLAK: Kamu tidak memiliki izin 'Manage Events' atau peran kepengurusan yang sesuai untuk mengakhiri acara."
+
+            req_data = EndDiscordEventSchema.model_validate(arguments or {})
+            if not self.bot.guilds:
+                return "❌ Failed: Bot is not currently in any server."
+            guild = (
+                getattr(ctx_obj, "guild", self.bot.guilds[0])
+                if ctx_obj
+                else self.bot.guilds[0]
+            )
+
+            # Target Resolution: Priority 1 (event_id), Priority 2 (event_name), Priority 3 (Active / Latest)
             target_event = None
             if req_data.event_id:
                 target_event = guild.get_scheduled_event(req_data.event_id)
@@ -375,13 +491,30 @@ class ServerEvents(commands.Cog):
                         )
                     except Exception:
                         target_event = None
+                if not target_event:
+                    return f"❌ Tidak ditemukan acara dengan ID {req_data.event_id} di server."
+
+            elif req_data.event_name:
+                try:
+                    events = await guild.fetch_scheduled_events()
+                except Exception:
+                    events = list(guild.scheduled_events)
+
+                target_name_lower = req_data.event_name.lower().strip()
+                matched = [e for e in events if target_name_lower in e.name.lower()]
+                if matched:
+                    active_matched = [
+                        e for e in matched if e.status == discord.EventStatus.active
+                    ]
+                    target_event = active_matched[0] if active_matched else matched[0]
+                else:
+                    return f"❌ Tidak ditemukan acara dengan nama/keyword '{req_data.event_name}' di server."
+
             else:
-                events = list(guild.scheduled_events)
-                if not events:
-                    try:
-                        events = await guild.fetch_scheduled_events()
-                    except Exception:
-                        events = []
+                try:
+                    events = await guild.fetch_scheduled_events()
+                except Exception:
+                    events = list(guild.scheduled_events)
 
                 active_events = [
                     e for e in events if e.status == discord.EventStatus.active
@@ -390,16 +523,38 @@ class ServerEvents(commands.Cog):
                     target_event = active_events[0]
                 elif events:
                     target_event = events[0]
+                else:
+                    return "❌ Tidak ada acara aktif atau terjadwal di server untuk diakhiri."
 
             if not target_event:
                 return "❌ Tidak ditemukan acara aktif atau terjadwal di server untuk diakhiri."
 
-            # End event in Discord API
+            # Discord Lifecycle State Machine
             try:
-                await target_event.end()
-            except Exception as api_err:
-                logger.warning(
-                    f"Could not end event directly via target_event.end(): {api_err}"
+                if target_event.status == discord.EventStatus.active:
+                    try:
+                        await target_event.end()
+                    except Exception as end_err:
+                        logger.warning(
+                            f"target_event.end() failed: {end_err}, falling back to delete()"
+                        )
+                        await target_event.delete()
+                elif target_event.status == discord.EventStatus.scheduled:
+                    try:
+                        if hasattr(target_event, "cancel"):
+                            await target_event.cancel()
+                        else:
+                            await target_event.delete()
+                    except Exception as cancel_err:
+                        logger.warning(
+                            f"target_event.cancel() failed: {cancel_err}, falling back to delete()"
+                        )
+                        await target_event.delete()
+                else:
+                    await target_event.delete()
+            except Exception as discord_err:
+                logger.error(
+                    f"Failed to end/delete discord event via API: {discord_err}"
                 )
 
             # Update DB state
@@ -408,6 +563,8 @@ class ServerEvents(commands.Cog):
                     select(ScheduledEvent).where(ScheduledEvent.id == target_event.id)
                 )
                 db_event = result.scalar_one_or_none()
+                if db_event and db_event.gcal_event_id:
+                    await delete_gcal_event(db_event.gcal_event_id)
                 if db_event:
                     db_event.is_active = False
                     await session.commit()
@@ -427,7 +584,7 @@ class ServerEvents(commands.Cog):
                     loc_name = target_event.location or (
                         target_event.channel.name if target_event.channel else ""
                     )
-                    comp_text = render_event_template(
+                    fallback_text = render_event_template(
                         "events/broadcast_completed.j2",
                         {
                             "event": {
@@ -437,6 +594,14 @@ class ServerEvents(commands.Cog):
                             },
                             "role_mention": None,
                         },
+                    )
+                    comp_text = await generate_dynamic_event_message(
+                        event_type="completed",
+                        event_name=target_event.name,
+                        event_description=target_event.description,
+                        fallback_text=fallback_text,
+                        role_mention=None,
+                        timeout_sec=120.0,
                     )
                     await broadcast_channel.send(
                         comp_text,
@@ -456,6 +621,13 @@ class ServerEvents(commands.Cog):
         try:
             if not ctx_obj:
                 return "❌ Failed to create thread: ctx_obj not found (bot doesn't know which channel to create the thread in)."
+
+            if not has_permission(
+                ctx_obj,
+                "create_public_threads",
+                allowed_roles=["Leader", "Co-Leader", "Staff-Core", "Admin", "Member"],
+            ):
+                return "❌ DITOLAK: Kamu tidak memiliki izin untuk membuat thread di server ini."
 
             thread_data = DiscordThreadSchema.model_validate(arguments)
             channel = ctx_obj.channel
@@ -482,6 +654,13 @@ class ServerEvents(commands.Cog):
             if not ctx_obj:
                 return "❌ Failed to create poll: ctx_obj not found."
 
+            if not has_permission(
+                ctx_obj,
+                "send_messages",
+                allowed_roles=["Leader", "Co-Leader", "Staff-Core", "Admin", "Member"],
+            ):
+                return "❌ DITOLAK: Kamu tidak memiliki izin untuk membuat poll di channel ini."
+
             poll_data = DiscordPollSchema.model_validate(arguments)
             channel = ctx_obj.channel
 
@@ -506,6 +685,13 @@ class ServerEvents(commands.Cog):
         try:
             if not ctx_obj:
                 return "❌ Failed to end poll: ctx_obj not found."
+
+            if not has_permission(
+                ctx_obj,
+                "manage_messages",
+                allowed_roles=["Leader", "Co-Leader", "Staff-Core", "Admin"],
+            ):
+                return "❌ DITOLAK: Kamu tidak memiliki izin 'Manage Messages' atau peran kepengurusan untuk mengakhiri poll."
 
             schema = EndDiscordPollSchema.model_validate(arguments)
             channel = ctx_obj.channel
@@ -637,8 +823,12 @@ class ServerEvents(commands.Cog):
             if not ctx_obj:
                 return "❌ Failed: ctx_obj not found."
 
-            if not ctx_obj.author.guild_permissions.manage_messages:
-                return "❌ DENIED: User does not have 'Manage Messages' permission."
+            if not has_permission(
+                ctx_obj,
+                "manage_messages",
+                allowed_roles=["Leader", "Co-Leader", "Staff-Core", "Admin"],
+            ):
+                return "❌ DITOLAK: Kamu tidak memiliki izin 'Manage Messages' di server ini."
 
             req_data = ClearMessagesSchema.model_validate(arguments)
             limit = min(req_data.limit, 500)
@@ -791,19 +981,30 @@ class ServerEvents(commands.Cog):
                             # Broadcast completion message
                             channel = self.bot.get_channel(ev.broadcast_channel_id)
                             if channel:
+                                role_mention_str = (
+                                    f"<@&{ev.target_role_id}>"
+                                    if ev.target_role_id
+                                    else None
+                                )
                                 comp_ctx = {
                                     "event": {
                                         "name": ev.name,
                                         "location": ev.location,
                                         "event_url": ev.event_url,
                                     },
-                                    "role_mention": f"<@&{ev.target_role_id}>"
-                                    if ev.target_role_id
-                                    else None,
+                                    "role_mention": role_mention_str,
                                 }
                                 try:
-                                    comp_text = render_event_template(
+                                    fallback_text = render_event_template(
                                         "events/broadcast_completed.j2", comp_ctx
+                                    )
+                                    comp_text = await generate_dynamic_event_message(
+                                        event_type="completed",
+                                        event_name=ev.name,
+                                        event_description=ev.description,
+                                        fallback_text=fallback_text,
+                                        role_mention=role_mention_str,
+                                        timeout_sec=120.0,
                                     )
                                     await channel.send(
                                         comp_text,
@@ -866,15 +1067,21 @@ class ServerEvents(commands.Cog):
                                 )
 
                     # 3. MULTI-INTERVAL REMINDERS: Check due reminder intervals
+                    ev_type = detect_event_type(ev.name)
                     intervals = ev.reminder_intervals or []
                     sent = list(ev.reminders_sent or [])
                     dirty = False
 
                     for interval in intervals:
-                        if interval in sent:
+                        if (
+                            interval in sent
+                            or (ev.id, interval) in self._reminded_cache
+                        ):
                             continue
+
                         trigger_time = ev.start_time - timedelta(minutes=interval)
-                        if now_utc >= trigger_time:
+                        # Tolerance window buffer: trigger_time <= now_utc < ev.start_time
+                        if now_utc >= trigger_time and now_utc < ev.start_time:
                             channel = self.bot.get_channel(ev.broadcast_channel_id)
                             if not channel:
                                 try:
@@ -885,28 +1092,24 @@ class ServerEvents(commands.Cog):
                                     channel = None
 
                             if channel:
-                                time_label = get_human_time_label(interval)
-                                ctx = {
-                                    "event": {
-                                        "name": ev.name,
-                                        "description": ev.description or "",
-                                        "location": ev.location,
-                                        "event_url": ev.event_url,
-                                    },
-                                    "time_label": time_label,
-                                    "formatted_time": format_time_wib(ev.start_time),
-                                    "role_mention": f"<@&{ev.target_role_id}>"
+                                embed = build_reminder_embed(
+                                    event_name=ev.name,
+                                    description=ev.description,
+                                    start_dt=ev.start_time,
+                                    location=ev.location,
+                                    interval_minutes=interval,
+                                    event_type=ev_type,
+                                    event_url=ev.event_url,
+                                )
+                                role_mention_str = (
+                                    f"<@&{ev.target_role_id}>"
                                     if ev.target_role_id
-                                    else None,
-                                }
+                                    else None
+                                )
                                 try:
-                                    reminder_text = render_event_template(
-                                        ev.template_name
-                                        or "events/default_reminder.j2",
-                                        ctx,
-                                    )
                                     await channel.send(
-                                        reminder_text,
+                                        content=role_mention_str,
+                                        embed=embed,
                                         allowed_mentions=discord.AllowedMentions(
                                             everyone=True, roles=True, users=True
                                         ),
@@ -917,6 +1120,7 @@ class ServerEvents(commands.Cog):
                                     )
 
                             sent.append(interval)
+                            self._reminded_cache.add((ev.id, interval))
                             dirty = True
 
                     if dirty:
@@ -928,9 +1132,130 @@ class ServerEvents(commands.Cog):
         except Exception as e:
             logger.error(f"Error in reminder_loop: {e}")
 
+    @tasks.loop(minutes=15)
+    async def sync_events_from_gcal(self):
+        """Mendeteksi agenda baru dari Google Calendar dan membuatnya di Discord."""
+        if not self.bot.guilds:
+            return
+
+        now_utc = datetime.now(timezone.utc)
+        try:
+            gcal_items = await list_gcal_events(time_min=now_utc)
+        except Exception as gcal_err:
+            logger.error(f"Error listing gcal events in sync loop: {gcal_err}")
+            return
+
+        for guild in self.bot.guilds:
+            announcement_channel_id = int(
+                os.environ.get("ANNOUNCEMENT_CHANNEL_ID", "0")
+            )
+            broadcast_channel = (
+                self.bot.get_channel(announcement_channel_id)
+                if announcement_channel_id
+                else guild.system_channel
+            )
+
+            async with async_session() as session:
+                for item in gcal_items:
+                    gcal_id = item.get("id")
+                    if not gcal_id:
+                        continue
+
+                    # Cek apakah sudah pernah tersimpan di DB
+                    res = await session.execute(
+                        select(ScheduledEvent).where(
+                            ScheduledEvent.gcal_event_id == gcal_id
+                        )
+                    )
+                    if res.scalar_one_or_none():
+                        continue  # Sudah tersinkron
+
+                    start_obj = item.get("start", {})
+                    end_obj = item.get("end", {})
+                    is_all_day = "date" in start_obj and "dateTime" not in start_obj
+
+                    start_iso = start_obj.get("dateTime") or start_obj.get("date")
+                    end_iso = end_obj.get("dateTime") or end_obj.get("date")
+                    if not start_iso:
+                        continue
+
+                    start_dt = datetime.fromisoformat(start_iso)
+                    if start_dt.tzinfo is None:
+                        start_dt = start_dt.replace(tzinfo=timezone.utc)
+
+                    end_dt = (
+                        datetime.fromisoformat(end_iso)
+                        if end_iso
+                        else start_dt + timedelta(hours=2)
+                    )
+                    if end_dt.tzinfo is None:
+                        end_dt = end_dt.replace(tzinfo=timezone.utc)
+
+                    name = item.get("summary", "Kegiatan KSM AIoT")
+                    desc = item.get(
+                        "description",
+                        "Agenda resmi dari Google Calendar KSM AIoT.",
+                    )
+                    loc = item.get("location", "Discord Voice Channel / Lab IoT")
+                    ev_type = detect_event_type(name, is_all_day=is_all_day)
+
+                    # Buat Scheduled Event di Discord
+                    try:
+                        discord_event = await guild.create_scheduled_event(
+                            name=name[:100],
+                            description=desc[:1000],
+                            start_time=start_dt,
+                            end_time=end_dt,
+                            entity_type=discord.EntityType.external,
+                            location=loc[:100],
+                            privacy_level=discord.PrivacyLevel.guild_only,
+                        )
+
+                        event_url = (
+                            f"https://discord.com/events/{guild.id}/{discord_event.id}"
+                        )
+                        pruned_intervals = prune_reminder_intervals(
+                            start_dt, now_utc, event_type=ev_type
+                        )
+
+                        db_record = ScheduledEvent(
+                            id=discord_event.id,
+                            gcal_event_id=gcal_id,
+                            guild_id=guild.id,
+                            broadcast_channel_id=broadcast_channel.id
+                            if broadcast_channel
+                            else guild.id,
+                            name=name,
+                            description=desc,
+                            location=loc,
+                            start_time=start_dt,
+                            end_time=end_dt,
+                            event_url=event_url,
+                            is_active=True,
+                            reminder_intervals=pruned_intervals,
+                            reminders_sent=[],
+                        )
+                        session.add(db_record)
+                        await session.commit()
+                        logger.info(
+                            f"Berhasil mensinkronkan event '{name}' ({ev_type}) dari Google Calendar ke Discord!"
+                        )
+                    except Exception as e:
+                        logger.error(f"Gagal membuat Discord Event dari GCal: {e}")
+
     @reminder_loop.before_loop
     async def before_reminder_loop(self):
-        await self.bot.wait_until_ready()
+        if hasattr(self.bot, "wait_until_ready"):
+            res = self.bot.wait_until_ready()
+            if asyncio.iscoroutine(res):
+                await res
+
+    @sync_events_from_gcal.before_loop
+    async def before_sync_events_from_gcal(self):
+        if hasattr(self.bot, "wait_until_ready"):
+            res = self.bot.wait_until_ready()
+            if asyncio.iscoroutine(res):
+                await res
 
     @commands.Cog.listener()
     async def on_scheduled_event_update(

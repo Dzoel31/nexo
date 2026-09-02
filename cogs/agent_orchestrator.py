@@ -29,6 +29,7 @@ class AgentOrchestrator(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self.worker_task = None
+        self._mention_cooldowns: dict[int, float] = {}
 
     async def cog_load(self):
         # Ensure queue and lock exist on bot
@@ -214,6 +215,7 @@ class AgentOrchestrator(commands.Cog):
 
     @app_commands.command(name="tanya", description="Ask Nexo about KSM AIoT projects!")
     @app_commands.describe(pertanyaan="What do you want to ask?")
+    @app_commands.checks.cooldown(1, 5.0, key=lambda i: (i.guild_id or 0, i.user.id))
     async def tanya(self, interaction: discord.Interaction, pertanyaan: str):
         await interaction.response.defer(ephemeral=False)
 
@@ -243,6 +245,24 @@ class AgentOrchestrator(commands.Cog):
             )
 
         await self.bot.message_queue.put((interaction, pertanyaan, time.time()))
+
+    @tanya.error
+    async def tanya_error(
+        self, interaction: discord.Interaction, error: app_commands.AppCommandError
+    ):
+        if isinstance(error, app_commands.CommandOnCooldown):
+            retry_in = round(error.retry_after, 1)
+            msg = f"⏳ Harap tunggu **{retry_in} detik** sebelum bertanya lagi ya!"
+            if interaction.response.is_done():
+                await interaction.followup.send(msg, ephemeral=True)
+            else:
+                await interaction.response.send_message(msg, ephemeral=True)
+        else:
+            logger.error(f"Error in /tanya slash command: {error}", exc_info=True)
+            if not interaction.response.is_done():
+                await interaction.response.send_message(
+                    "❌ Terjadi kesalahan saat memproses perintah.", ephemeral=True
+                )
 
     @app_commands.command(
         name="token-stats",
@@ -423,14 +443,16 @@ class AgentOrchestrator(commands.Cog):
 
     @commands.Cog.listener()
     async def on_message(self, message):
-        # Prevents the bot from replying to itself
-        if message.author == self.bot.user:
+        # Prevents the bot from replying to itself or other bots
+        if message.author.bot or message.author == self.bot.user:
             return
 
-        # Cek apakah bot di-tag dalam pesan (direct mention atau raw mention)
+        if not self.bot.user:
+            return
+
+        # Hanya trigger jika bot di-mention secara eksplisit/langsung (bukan karena @everyone atau @here)
         is_mentioned = (
-            self.bot.user.mentioned_in(message)
-            or (self.bot.user in message.mentions)
+            (self.bot.user in message.mentions)
             or (f"<@{self.bot.user.id}>" in message.content)
             or (f"<@!{self.bot.user.id}>" in message.content)
         )
@@ -439,6 +461,21 @@ class AgentOrchestrator(commands.Cog):
             # Check if it's a command prefix (e.g., typo) ignore
             if message.content.startswith("$"):
                 return
+
+            # Sliding Cooldown (5.0s per user)
+            now = time.time()
+            last_call = self._mention_cooldowns.get(message.author.id, 0.0)
+            if now - last_call < 5.0:
+                remaining = round(5.0 - (now - last_call), 1)
+                try:
+                    await message.reply(
+                        f"⏳ Harap tunggu **{remaining} detik** sebelum bertanya lagi ya!",
+                        delete_after=4,
+                    )
+                except Exception:
+                    pass
+                return
+            self._mention_cooldowns[message.author.id] = now
 
             try:
                 is_healthy, error_msg = await check_services_health()

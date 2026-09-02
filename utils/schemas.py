@@ -1,6 +1,16 @@
-from typing import List, Optional
+from typing import Any, List, Optional
 from pydantic import BaseModel, Field, field_validator
 import re
+
+
+def get_clean_schema(model: type[BaseModel]) -> dict[str, Any]:
+    """
+    Returns a token-efficient JSON schema representation of a Pydantic model
+    using the centralized sanitize_parameters cleaner.
+    """
+    from utils.mcp_client import sanitize_parameters
+
+    return sanitize_parameters(model.model_json_schema())
 
 
 class DiscordEventSchema(BaseModel):
@@ -31,10 +41,21 @@ class DiscordEventSchema(BaseModel):
         return v
 
 
+class ListDiscordEventsSchema(BaseModel):
+    status_filter: Optional[str] = Field(
+        default="all",
+        description="Filter events: 'active', 'scheduled', or 'all'",
+    )
+
+
 class EndDiscordEventSchema(BaseModel):
+    event_name: Optional[str] = Field(
+        default=None,
+        description="Event name or keyword to search and end (e.g. 'Diskusi Mingguan')",
+    )
     event_id: Optional[int] = Field(
         default=None,
-        description="Scheduled Event ID to end (omit to auto-find active/latest event)",
+        description="Specific Discord Scheduled Event snowflake ID to end",
     )
 
 
