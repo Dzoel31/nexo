@@ -99,11 +99,17 @@ class ScheduledEvent(Base):
         JSON, default=list, nullable=False
     )
 
-    # Konfigurasi Template & Target Role
+    # Konfigurasi Template, Klasifikasi & Target Role
     template_name: Mapped[str] = mapped_column(
         String(100), default="default_reminder.j2", nullable=False
     )
     target_role_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    classification_label: Mapped[str | None] = mapped_column(
+        String(50), nullable=True, index=True
+    )
+    is_discord_event: Mapped[bool] = mapped_column(
+        Boolean, default=True, nullable=False
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(timezone.utc)

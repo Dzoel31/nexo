@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import re
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 import discord
@@ -237,27 +238,33 @@ async def generate_dynamic_event_message(
     """
     if event_type == "completed":
         system_instruction = (
-            "You are Nexo, the friendly, casual, and supportive bot for KSM AIoT "
-            "(Kelompok Studi Mahasiswa Artificial Intelligence of Things). "
-            "Write a warm, concise Indonesian closing and thank-you announcement for a completed community event. "
-            "Tone must be relaxed, natural, and encouraging. Use emojis naturally. "
-            "Do NOT include markdown tables, headers, or quotes. Keep it to 1-2 short paragraphs."
+            "You are Nexo, the helpful assistant bot for KSM AIoT (Kelompok Studi Mahasiswa AIoT). "
+            "Write a warm, concise, and professional-yet-friendly Indonesian closing announcement for Discord. "
+            "CRITICAL RULES:\n"
+            "- Do NOT use social media hashtags (strictly no #).\n"
+            "- Do NOT use hyperbolic marketer phrases or exaggerated slang.\n"
+            "- Keep the tone polite, natural, and appreciative.\n"
+            "- Keep it to 1-2 short paragraphs without markdown tables, headers, or quotes."
         )
         user_prompt = (
-            f"Event '{event_name}' baru saja resmi selesai.\n"
-            f"Deskripsi/Topik Event: {event_description or 'Sesi diskusi dan kolaborasi seputar teknologi/AIoT'}.\n"
-            "Buatkan pesan penutupan acara yang mengapresiasi kehadiran seluruh teman-teman KSM AIoT dan ajak mereka untuk menantikan event berikutnya!"
+            f"Acara '{event_name}' baru saja selesai.\n"
+            f"Topik: {event_description or 'Sesi kolaborasi dan diskusi KSM AIoT'}.\n"
+            "Tulis pesan penutupan singkat yang berterima kasih atas partisipasi teman-teman dan nantikan agenda KSM AIoT berikutnya."
         )
     elif event_type == "started":
         system_instruction = (
-            "You are Nexo, the friendly bot for KSM AIoT. "
-            "Write an energetic, casual Indonesian announcement that an event has just started now. "
-            "Keep it short, direct, and welcoming with natural emojis."
+            "You are Nexo, the helpful assistant bot for KSM AIoT (Kelompok Studi Mahasiswa AIoT). "
+            "Write a clear, friendly, and practical Indonesian announcement for Discord that an event is starting now. "
+            "CRITICAL RULES:\n"
+            "- Do NOT use social media hashtags (strictly no #).\n"
+            "- Do NOT use exaggerated marketing slang (e.g. avoid 'gila seru', 'on fire', 'gaskeun abis').\n"
+            "- Keep the tone natural, direct, and welcoming like a college student in a tech lab community.\n"
+            "- Keep it to 1-2 short paragraphs."
         )
         user_prompt = (
-            f"Event '{event_name}' sekarang resmi dimulai!\n"
-            f"Topik: {event_description or 'Sesi KSM AIoT'}.\n"
-            "Ajak seluruh member untuk segera bergabung sekarang."
+            f"Acara '{event_name}' baru saja resmi dimulai sekarang.\n"
+            f"Topik/Deskripsi: {event_description or 'Sesi KSM AIoT'}.\n"
+            "Tulis pengumuman singkat bahwa acara sudah dimulai dan ajak member untuk segera bergabung."
         )
     else:
         return fallback_text
@@ -272,11 +279,14 @@ async def generate_dynamic_event_message(
                     {"role": "system", "content": system_instruction},
                     {"role": "user", "content": user_prompt},
                 ],
-                max_tokens=200,
-                temperature=0.7,
+                max_tokens=150,
+                temperature=0.3,
             )
             if response.choices and response.choices[0].message.content:
-                return response.choices[0].message.content.strip()
+                text = response.choices[0].message.content.strip()
+                # Clean any stray hashtags just in case
+                text = re.sub(r"#\w+", "", text).strip()
+                return text
             return ""
 
         generated_text = await asyncio.wait_for(_call_llm(), timeout=timeout_sec)

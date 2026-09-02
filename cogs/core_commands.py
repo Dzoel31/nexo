@@ -1,8 +1,10 @@
+import re
 import discord
 import logging
 from discord import app_commands
 from discord.ext import commands
 from db.repository import reset_conversation_history
+from utils.auth_helper import has_permission
 from utils.mcp_client import (
     LLAMA_BASE_URL,
     MCP_SERVER_URL,
@@ -91,23 +93,26 @@ class HelpView(discord.ui.View):
         if self.current_page == 0:
             embed.title = "🌟 Meta & General Commands"
             embed.description = (
-                "Perintah umum dan informasi status bot Nexo KSM AIoT.\n"
+                "Perintah umum, moderasi, dan informasi status bot Nexo KSM AIoT.\n"
                 "─────────────────────────────"
             )
             embed.add_field(
-                name="Getting Started",
+                name="Getting Started & Status",
                 value=(
-                    "`$help` : Menampilkan panduan pengguna interaktif ini\n"
-                    "`$ping` : Cek latensi dan kecepatan respon bot ke Discord\n"
-                    "`$status` : Cek status kesehatan llama-server & MCP Server"
+                    "`$help` / `/help` : Menampilkan panduan pengguna interaktif ini\n"
+                    "`$ping` : Cek latensi bot ke Discord Gateway & Database\n"
+                    "`/system_info` : Cek metrik CPU, RAM, & status host Nexo\n"
+                    "`/token_analytics` : Dashboard analitik konsumsi token AI"
                 ),
                 inline=False,
             )
             embed.add_field(
                 name="Management & Moderation",
                 value=(
-                    "`$clear [limit]` : Hapus pesan percakapan secara masal (Admin)\n"
-                    "`$reset [user/all]` : Bersihkan memori percakapan AI"
+                    "`$say <pesan>` : Kirim pesan atas nama bot di channel aktif (Admin/Staff)\n"
+                    "`$say to <#channel> <pesan>` : Kirim pesan atas nama bot ke channel tujuan (Admin/Staff)\n"
+                    "`$clear [limit]` : Hapus pesan percakapan secara massal (Admin)\n"
+                    "`/reset_memory` : Bersihkan riwayat memori sesi obrolan aktif"
                 ),
                 inline=False,
             )
@@ -115,22 +120,25 @@ class HelpView(discord.ui.View):
         elif self.current_page == 1:
             embed.title = "🤖 AI & LLM Commands"
             embed.description = (
-                "Fitur kecerdasan buatan terintegrasi Llama.cpp & MCP.\n"
+                "Fitur kecerdasan buatan terintegrasi Llama.cpp, MCP, & Google Calendar.\n"
                 "─────────────────────────────"
             )
             embed.add_field(
-                name="Interactive AI Slash Commands",
+                name="Interactive AI Chat & Memory",
                 value=(
-                    "`/tanya [pertanyaan]` : Bertanya ke AI Nexo (Terhubung ke sensor & IoT tools)\n"
-                    "`/reset` : Bersihkan riwayat percakapan konteks AI Anda"
+                    "`/reset_memory` : Bersihkan riwayat percakapan konteks AI Anda\n"
+                    "`$tools` : Tampilkan seluruh tools lokal & MCP aktif\n"
+                    "`$sync` : Sinkronisasi manual Application Slash Commands (Owner)"
                 ),
                 inline=False,
             )
             embed.add_field(
-                name="AI Tools Commands",
+                name="Autonomous Capabilities (Gemma 4)",
                 value=(
-                    "`$tools` / `/tools` : Tampilkan seluruh tools lokal & MCP aktif\n"
-                    "`$reset all` : Bersihkan seluruh memori AI server (Admin)"
+                    "Cukup mention/ajak ngobrol Nexo secara natural untuk:\n"
+                    "• **Google Calendar & Discord Events:** Buat, sync 2 arah, klasifikasi & reminder agenda\n"
+                    "• **Interactive Polls:** Buat polling interaktif & hitung hasil suara\n"
+                    "• **Voice & Forum:** Buat thread forum & cek anggota di voice channel"
                 ),
                 inline=False,
             )
@@ -214,15 +222,16 @@ class HelpView(discord.ui.View):
                 value=(
                     "• **Endpoint:** `/nexo/webhook`\n"
                     "• **Authentication:** HMAC SHA-256 (`X-Hub-Signature-256`)\n"
-                    "• **Routing:** Dikirim otomatis ke Channel Tim sesuai `projects.json`"
+                    "• **Routing:** Notifikasi commit & release dikirim ke channel tim sesuai `projects.json`"
                 ),
                 inline=False,
             )
             embed.add_field(
                 name="Continuous Delivery (CD)",
                 value=(
-                    "• Otomatis me-recreate kontainer Docker VPS saat rilis sukses\n"
-                    "• Notifikasi rilis resmi disiarkan ke channel `#release-notes`"
+                    "• Mendukung webhook deployment otomatis ke VPS / Portainer\n"
+                    "• Notifikasi rilis resmi disiarkan ke channel `#release-notes`\n"
+                    "• `/deploy [project]` : Trigger manual webhook deployment (Admin)"
                 ),
                 inline=False,
             )
@@ -519,6 +528,87 @@ class CoreCommands(commands.Cog):
 
         embed.set_footer(text=f"Server: {interaction.guild.name} • Nexo KSM AIoT")
         await interaction.response.send_message(embed=embed)
+
+    @commands.command(name="say")
+    async def say(self, ctx, *, text: str = None):
+        """
+        Sends a message to a destination channel on behalf of the bot.
+        Usage: $say to #channel <message> or $say to <channel_id/name> <message>
+        """
+        if not has_permission(
+            ctx,
+            "manage_messages",
+            allowed_roles=["Leader", "Co-Leader", "Staff-Core", "Admin"],
+        ):
+            return await ctx.send(
+                "❌ **Akses Ditolak**: Anda tidak memiliki izin untuk menggunakan perintah `$say`.",
+                delete_after=5,
+            )
+
+        if not text or not text.strip():
+            return await ctx.send(
+                "ℹ️ **Format Penggunaan:** `$say to #channel <pesan>` atau `$say to <channel_id> <pesan>`",
+                delete_after=8,
+            )
+
+        content = text.strip()
+        # Handle 'to' prefix if present
+        if content.lower().startswith("to "):
+            content = content[3:].strip()
+
+        # Parse channel and message
+        parts = content.split(maxsplit=1)
+        if not parts or len(parts) < 2:
+            return await ctx.send(
+                "⚠️ Mohon sertakan channel tujuan dan isi pesan!\nContoh: `$say to #pengumuman Selamat sore semua!`",
+                delete_after=8,
+            )
+
+        channel_identifier, message_body = parts[0], parts[1].strip()
+        if not message_body:
+            return await ctx.send("⚠️ Pesan tidak boleh kosong!", delete_after=5)
+
+        # Resolve channel: mention (<#id>), ID, or channel name
+        target_channel = None
+        cleaned_id = re.sub(r"[<#>]", "", channel_identifier)
+        if cleaned_id.isdigit():
+            target_channel = ctx.guild.get_channel(int(cleaned_id))
+
+        if not target_channel:
+            c_name = channel_identifier.lower().lstrip("#")
+            for ch in ctx.guild.text_channels:
+                if ch.name.lower() == c_name:
+                    target_channel = ch
+                    break
+
+        if not target_channel:
+            return await ctx.send(
+                f"❌ Channel `{channel_identifier}` tidak ditemukan di server ini.",
+                delete_after=6,
+            )
+
+        try:
+            # Delete invocation message if possible
+            try:
+                await ctx.message.delete()
+            except Exception:
+                pass
+
+            await target_channel.send(
+                message_body,
+                allowed_mentions=discord.AllowedMentions(
+                    everyone=True, roles=True, users=True
+                ),
+            )
+            logger.info(
+                f"User {ctx.author.name} (ID: {ctx.author.id}) used $say to #{target_channel.name}"
+            )
+        except discord.Forbidden:
+            await ctx.send(
+                f"❌ Bot tidak memiliki izin mengirim pesan di {target_channel.mention}."
+            )
+        except Exception as e:
+            await ctx.send(f"❌ Gagal mengirim pesan: {e}")
 
 
 async def setup(bot):

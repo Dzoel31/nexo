@@ -2,6 +2,7 @@ import asyncio
 from collections import OrderedDict
 from datetime import datetime, timedelta, timezone
 import hashlib
+import inspect
 import logging
 import os
 import uuid
@@ -481,7 +482,7 @@ async def check_and_trigger_rolling_summary(
         if callable(on_compaction_start):
             try:
                 res = on_compaction_start()
-                if asyncio.iscoroutine(res):
+                if inspect.isawaitable(res):
                     await res
             except Exception as cb_err:
                 logger.warning(f"Error in on_compaction_start callback: {cb_err}")
@@ -558,7 +559,7 @@ async def check_and_trigger_rolling_summary(
             if callable(on_compaction_end):
                 try:
                     res = on_compaction_end()
-                    if asyncio.iscoroutine(res):
+                    if inspect.isawaitable(res):
                         await res
                 except Exception as cb_err:
                     logger.warning(f"Error in on_compaction_end callback: {cb_err}")

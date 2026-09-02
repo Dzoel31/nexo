@@ -61,7 +61,12 @@ async def create_gcal_event(
         return service.events().insert(calendarId=cal_id, body=event_body).execute()
 
     try:
-        return await asyncio.to_thread(_sync_create)
+        res = await asyncio.to_thread(_sync_create)
+        if res:
+            logger.info(
+                f"✅ Berhasil membuat event Google Calendar: '{name}' (ID: {res.get('id')}) - Link: {res.get('htmlLink')}"
+            )
+        return res
     except Exception as e:
         logger.error(f"Error creating Google Calendar event: {e}")
         return None
@@ -77,6 +82,7 @@ async def delete_gcal_event(event_id: str) -> bool:
 
     try:
         await asyncio.to_thread(_sync_delete)
+        logger.info(f"✅ Berhasil menghapus event Google Calendar (ID: {event_id})")
         return True
     except Exception as e:
         logger.error(f"Error deleting Google Calendar event ({event_id}): {e}")
@@ -105,7 +111,9 @@ async def list_gcal_events(
         return events_result.get("items", [])
 
     try:
-        return await asyncio.to_thread(_sync_list)
+        items = await asyncio.to_thread(_sync_list)
+        logger.debug(f"Mengambil {len(items)} event dari Google Calendar.")
+        return items
     except Exception as e:
         logger.error(f"Error listing Google Calendar events: {e}")
         return []

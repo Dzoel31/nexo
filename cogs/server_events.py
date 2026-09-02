@@ -1,5 +1,7 @@
 import asyncio
 from datetime import datetime, timedelta, timezone
+import hashlib
+import inspect
 import json
 import logging
 import os
@@ -12,6 +14,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from db.models import ScheduledEvent
 from db.session import async_session
+from utils.event_classifier import default_event_classifier
 from utils.event_manager import (
     build_reminder_embed,
     detect_event_type,
@@ -228,12 +231,19 @@ class ServerEvents(commands.Cog):
             start_str = f"{event_data.start_date}T{event_data.start_time}+07:00"
             start_dt = datetime.fromisoformat(start_str)
 
+            now_utc = datetime.now(timezone.utc)
+            if start_dt <= now_utc:
+                return "❌ Gagal membuat acara: Waktu mulai acara tidak boleh di masa lalu. Harap tentukan tanggal dan jam di masa mendatang."
+
             # For end_time, if provided we parse it, otherwise we set a default of +2 hours
             if event_data.end_date and event_data.end_time:
                 end_str = f"{event_data.end_date}T{event_data.end_time}+07:00"
                 end_dt = datetime.fromisoformat(end_str)
             else:
                 end_dt = start_dt + timedelta(hours=2)
+
+            if end_dt <= start_dt:
+                return "❌ Gagal membuat acara: Waktu selesai acara harus lebih besar dari waktu mulai acara."
 
             # Get the guild/server object where this bot is located
             if not self.bot.guilds:
@@ -357,6 +367,13 @@ class ServerEvents(commands.Cog):
                 except Exception as b_err:
                     logger.error(f"Failed to send initial event broadcast: {b_err}")
 
+            # Classify event using Hybrid Event Classifier
+            classification = await default_event_classifier.classify_event(
+                summary=event_data.name,
+                description=event_data.description,
+                gcal_id=gcal_id,
+            )
+
             # Detect event type (EVENT vs DEADLINE) and prune reminder intervals based on lead time
             ev_type = detect_event_type(event_data.name)
             pruned_intervals = prune_reminder_intervals(start_dt, event_type=ev_type)
@@ -381,6 +398,8 @@ class ServerEvents(commands.Cog):
                     reminders_sent=[],
                     template_name="default_reminder.j2",
                     target_role_id=target_role_id,
+                    classification_label=classification.label,
+                    is_discord_event=True,
                     is_active=True,
                 )
                 session.add(db_event)
@@ -1021,55 +1040,90 @@ class ServerEvents(commands.Cog):
                         await session.commit()
                         continue
 
-                    # 2. AUTO-START: Check if event start time has arrived
+                    # 2. AUTO-START & BROADCAST STARTED: Check if event start time has arrived
+                    sent = list(ev.reminders_sent or [])
                     if (
-                        discord_event
-                        and discord_event.status == discord.EventStatus.scheduled
-                        and now_utc >= ev.start_time
+                        now_utc >= ev.start_time
+                        and 0 not in sent
+                        and (ev.id, 0) not in self._reminded_cache
                     ):
-                        if discord_event.channel:
+                        # Claim/Lock in memory and DB immediately to prevent concurrent broadcast
+                        self._reminded_cache.add((ev.id, 0))
+                        sent.append(0)
+                        ev.reminders_sent = sent
+                        flag_modified(ev, "reminders_sent")
+                        await session.commit()
+
+                        # If voice/stage channel event is still scheduled, try to start it
+                        if (
+                            discord_event
+                            and discord_event.status == discord.EventStatus.scheduled
+                            and discord_event.channel
+                        ):
                             try:
                                 await discord_event.start()
                                 logger.info(
                                     f"Auto-started scheduled event {ev.id} ({ev.name})"
                                 )
-                                # Broadcast started message
-                                channel = self.bot.get_channel(ev.broadcast_channel_id)
-                                if channel:
-                                    start_ctx = {
-                                        "event": {
-                                            "name": ev.name,
-                                            "location": ev.location,
-                                            "event_url": ev.event_url,
-                                        },
-                                        "role_mention": f"<@&{ev.target_role_id}>"
-                                        if ev.target_role_id
-                                        else None,
-                                    }
-                                    try:
-                                        start_text = render_event_template(
-                                            "events/broadcast_started.j2",
-                                            start_ctx,
-                                        )
-                                        await channel.send(
-                                            start_text,
-                                            allowed_mentions=discord.AllowedMentions(
-                                                everyone=True, roles=True, users=True
-                                            ),
-                                        )
-                                    except Exception as start_err:
-                                        logger.error(
-                                            f"Failed to send started broadcast: {start_err}"
-                                        )
                             except Exception as start_api_err:
                                 logger.warning(
                                     f"Could not auto-start discord event {ev.id}: {start_api_err}"
                                 )
 
+                        # Broadcast started message to announcement channel
+                        channel = self.bot.get_channel(ev.broadcast_channel_id)
+                        if not channel:
+                            try:
+                                channel = await self.bot.fetch_channel(
+                                    ev.broadcast_channel_id
+                                )
+                            except Exception:
+                                channel = None
+
+                        if channel:
+                            role_mention_str = (
+                                f"<@&{ev.target_role_id}>"
+                                if ev.target_role_id
+                                else None
+                            )
+                            start_ctx = {
+                                "event": {
+                                    "name": ev.name,
+                                    "location": ev.location,
+                                    "event_url": ev.event_url,
+                                },
+                                "role_mention": role_mention_str,
+                            }
+                            try:
+                                fallback_start = render_event_template(
+                                    "events/broadcast_started.j2",
+                                    start_ctx,
+                                )
+                                start_text = await generate_dynamic_event_message(
+                                    event_type="started",
+                                    event_name=ev.name,
+                                    event_description=ev.description,
+                                    fallback_text=fallback_start,
+                                    role_mention=role_mention_str,
+                                    timeout_sec=120.0,
+                                )
+                                await channel.send(
+                                    start_text,
+                                    allowed_mentions=discord.AllowedMentions(
+                                        everyone=True, roles=True, users=True
+                                    ),
+                                )
+                                logger.info(
+                                    f"Berhasil mengirim broadcast started untuk event '{ev.name}'"
+                                )
+                            except Exception as start_err:
+                                logger.error(
+                                    f"Failed to send started broadcast for event {ev.id}: {start_err}"
+                                )
+
                     # 3. MULTI-INTERVAL REMINDERS: Check due reminder intervals
                     ev_type = detect_event_type(ev.name)
                     intervals = ev.reminder_intervals or []
-                    sent = list(ev.reminders_sent or [])
                     dirty = False
 
                     for interval in intervals:
@@ -1199,27 +1253,37 @@ class ServerEvents(commands.Cog):
                     loc = item.get("location", "Discord Voice Channel / Lab IoT")
                     ev_type = detect_event_type(name, is_all_day=is_all_day)
 
-                    # Buat Scheduled Event di Discord
-                    try:
-                        discord_event = await guild.create_scheduled_event(
-                            name=name[:100],
-                            description=desc[:1000],
-                            start_time=start_dt,
-                            end_time=end_dt,
-                            entity_type=discord.EntityType.external,
-                            location=loc[:100],
-                            privacy_level=discord.PrivacyLevel.guild_only,
+                    # Cek validitas waktu terhadap masa sekarang (Anti-Past Event Error)
+                    current_now_utc = datetime.now(timezone.utc)
+                    if end_dt <= current_now_utc:
+                        # 1. Event sudah selesai sepenuhnya di masa lalu -> Skip dengan tenang
+                        logger.debug(
+                            f"Mengabaikan event lampau '{name}' dari Google Calendar (selesai pada {end_dt})"
                         )
+                        continue
 
-                        event_url = (
-                            f"https://discord.com/events/{guild.id}/{discord_event.id}"
-                        )
-                        pruned_intervals = prune_reminder_intervals(
-                            start_dt, now_utc, event_type=ev_type
-                        )
+                    # 2. Jika event sedang berlangsung (start_dt <= now < end_dt), sesuaikan waktu mulai untuk Discord
+                    discord_start_time = start_dt
+                    if start_dt <= current_now_utc:
+                        discord_start_time = current_now_utc + timedelta(minutes=1)
+                        if discord_start_time >= end_dt:
+                            end_dt = discord_start_time + timedelta(hours=1)
 
+                    # 3. Classify event using Hybrid Event Classifier
+                    classification = await default_event_classifier.classify_event(
+                        summary=name, description=desc, gcal_id=gcal_id
+                    )
+
+                    if not classification.is_discord_event:
+                        logger.info(
+                            f"Agenda GCal '{name}' diklasifikasikan sebagai '{classification.label}' (is_discord_event=False). Melewati pembuatan Discord Scheduled Event."
+                        )
+                        hash_id = int(
+                            hashlib.sha256(gcal_id.encode()).hexdigest()[:14],
+                            16,
+                        )
                         db_record = ScheduledEvent(
-                            id=discord_event.id,
+                            id=hash_id,
                             gcal_event_id=gcal_id,
                             guild_id=guild.id,
                             broadcast_channel_id=broadcast_channel.id
@@ -1230,7 +1294,83 @@ class ServerEvents(commands.Cog):
                             location=loc,
                             start_time=start_dt,
                             end_time=end_dt,
+                            event_url="",
+                            classification_label=classification.label,
+                            is_discord_event=False,
+                            is_active=False,
+                            reminder_intervals=[],
+                            reminders_sent=[],
+                        )
+                        session.add(db_record)
+                        await session.commit()
+                        continue
+
+                    # Buat Scheduled Event di Discord
+                    try:
+                        discord_event = await guild.create_scheduled_event(
+                            name=name[:100],
+                            description=desc[:1000],
+                            start_time=discord_start_time,
+                            end_time=end_dt,
+                            entity_type=discord.EntityType.external,
+                            location=loc[:100],
+                            privacy_level=discord.PrivacyLevel.guild_only,
+                        )
+
+                        event_url = (
+                            f"https://discord.com/events/{guild.id}/{discord_event.id}"
+                        )
+                        pruned_intervals = prune_reminder_intervals(
+                            discord_start_time, now_utc, event_type=ev_type
+                        )
+
+                        # Render Broadcast Template via Jinja2
+                        broadcast_msg = None
+                        if broadcast_channel:
+                            try:
+                                initial_context = {
+                                    "event": {
+                                        "name": name,
+                                        "description": desc or "",
+                                        "location": loc,
+                                        "event_url": event_url,
+                                    },
+                                    "formatted_date": format_indonesian_date(start_dt),
+                                    "formatted_time": format_time_wib(start_dt),
+                                    "role_mention": None,
+                                }
+                                rendered_msg = render_event_template(
+                                    "events/broadcast_initial.j2", initial_context
+                                )
+                                broadcast_msg = await broadcast_channel.send(
+                                    rendered_msg,
+                                    allowed_mentions=discord.AllowedMentions(
+                                        everyone=True, roles=True, users=True
+                                    ),
+                                )
+                            except Exception as b_err:
+                                logger.error(
+                                    f"Failed to send initial event broadcast for GCal event: {b_err}"
+                                )
+
+                        db_record = ScheduledEvent(
+                            id=discord_event.id,
+                            gcal_event_id=gcal_id,
+                            guild_id=guild.id,
+                            broadcast_channel_id=broadcast_channel.id
+                            if broadcast_channel
+                            else guild.id,
+                            broadcast_message_id=broadcast_msg.id
+                            if broadcast_msg
+                            else None,
+                            name=name,
+                            description=desc,
+                            location=loc,
+                            start_time=start_dt,
+                            end_time=end_dt,
                             event_url=event_url,
+                            classification_label=classification.label,
+                            is_discord_event=True,
                             is_active=True,
                             reminder_intervals=pruned_intervals,
                             reminders_sent=[],
@@ -1238,7 +1378,7 @@ class ServerEvents(commands.Cog):
                         session.add(db_record)
                         await session.commit()
                         logger.info(
-                            f"Berhasil mensinkronkan event '{name}' ({ev_type}) dari Google Calendar ke Discord!"
+                            f"Berhasil mensinkronkan event '{name}' ({ev_type}/{classification.label}) dari Google Calendar ke Discord!"
                         )
                     except Exception as e:
                         logger.error(f"Gagal membuat Discord Event dari GCal: {e}")
@@ -1247,15 +1387,135 @@ class ServerEvents(commands.Cog):
     async def before_reminder_loop(self):
         if hasattr(self.bot, "wait_until_ready"):
             res = self.bot.wait_until_ready()
-            if asyncio.iscoroutine(res):
+            if inspect.isawaitable(res):
                 await res
 
     @sync_events_from_gcal.before_loop
     async def before_sync_events_from_gcal(self):
         if hasattr(self.bot, "wait_until_ready"):
             res = self.bot.wait_until_ready()
-            if asyncio.iscoroutine(res):
+            if inspect.isawaitable(res):
                 await res
+
+    @commands.Cog.listener()
+    async def on_scheduled_event_create(self, event: discord.ScheduledEvent):
+        """
+        Gateway listener triggered when an event is created in Discord (e.g. via UI).
+        Syncs event to Google Calendar, saves to PostgreSQL, and broadcasts initial announcement.
+        """
+        try:
+            # Check if this event is already registered in DB (e.g. created by bot tool)
+            async with async_session() as session:
+                res = await session.execute(
+                    select(ScheduledEvent).where(ScheduledEvent.id == event.id)
+                )
+                if res.scalar_one_or_none():
+                    return  # Already tracked
+
+            guild = event.guild
+            if not guild:
+                return
+
+            start_dt = event.start_time
+            end_dt = event.end_time or (start_dt + timedelta(hours=2))
+            loc_str = event.location or (
+                event.channel.name if event.channel else "Discord"
+            )
+
+            # 1. Sync to Google Calendar
+            gcal_data = await create_gcal_event(
+                name=event.name,
+                description=event.description or "",
+                start_dt=start_dt,
+                end_dt=end_dt,
+                location=loc_str,
+            )
+            gcal_id = gcal_data.get("id") if gcal_data else None
+
+            # 2. Determine broadcast channel
+            announcement_channel_id = int(
+                os.environ.get("ANNOUNCEMENT_CHANNEL_ID", "0")
+            )
+            broadcast_channel = None
+            if announcement_channel_id:
+                broadcast_channel = self.bot.get_channel(announcement_channel_id)
+            if not broadcast_channel:
+                broadcast_channel = guild.system_channel
+
+            event_url = f"https://discord.com/events/{guild.id}/{event.id}"
+
+            # 3. Render and send broadcast initial announcement
+            broadcast_msg = None
+            if broadcast_channel:
+                try:
+                    initial_context = {
+                        "event": {
+                            "name": event.name,
+                            "description": event.description or "",
+                            "location": loc_str,
+                            "event_url": event_url,
+                        },
+                        "formatted_date": format_indonesian_date(start_dt),
+                        "formatted_time": format_time_wib(start_dt),
+                        "role_mention": None,
+                    }
+                    rendered_msg = render_event_template(
+                        "events/broadcast_initial.j2", initial_context
+                    )
+                    broadcast_msg = await broadcast_channel.send(
+                        rendered_msg,
+                        allowed_mentions=discord.AllowedMentions(
+                            everyone=True, roles=True, users=True
+                        ),
+                    )
+                except Exception as b_err:
+                    logger.error(
+                        f"Failed to send initial broadcast on_scheduled_event_create: {b_err}"
+                    )
+
+            ev_type = detect_event_type(event.name)
+            now_utc = datetime.now(timezone.utc)
+            pruned_intervals = prune_reminder_intervals(
+                start_dt, now_utc, event_type=ev_type
+            )
+
+            # Classify event
+            classification = await default_event_classifier.classify_event(
+                event.name, event.description, gcal_id=gcal_id
+            )
+
+            # 4. Save to PostgreSQL DB
+            async with async_session() as session:
+                db_event = ScheduledEvent(
+                    id=event.id,
+                    gcal_event_id=gcal_id,
+                    guild_id=guild.id,
+                    broadcast_channel_id=broadcast_channel.id
+                    if broadcast_channel
+                    else guild.id,
+                    broadcast_message_id=broadcast_msg.id if broadcast_msg else None,
+                    name=event.name,
+                    description=event.description,
+                    location=loc_str,
+                    start_time=start_dt,
+                    end_time=end_dt,
+                    event_url=event_url,
+                    classification_label=classification.label,
+                    is_discord_event=True,
+                    reminder_intervals=pruned_intervals,
+                    reminders_sent=[],
+                    template_name="default_reminder.j2",
+                    is_active=True,
+                )
+                session.add(db_event)
+                await session.commit()
+            logger.info(
+                f"Successfully synced UI-created Discord event '{event.name}' ({classification.label}) to DB and Google Calendar."
+            )
+        except Exception as err:
+            logger.error(
+                f"Error handling on_scheduled_event_create: {err}", exc_info=True
+            )
 
     @commands.Cog.listener()
     async def on_scheduled_event_update(
@@ -1277,6 +1537,73 @@ class ServerEvents(commands.Cog):
                 ):
                     db_event.is_active = False
                 else:
+                    # Check if event was just transitioned to active
+                    was_not_active = before.status != discord.EventStatus.active
+                    is_now_active = after.status == discord.EventStatus.active
+                    sent_list = list(db_event.reminders_sent or [])
+
+                    if (
+                        was_not_active
+                        and is_now_active
+                        and 0 not in sent_list
+                        and (db_event.id, 0) not in self._reminded_cache
+                    ):
+                        # Claim lock immediately in cache and DB
+                        self._reminded_cache.add((db_event.id, 0))
+                        sent_list.append(0)
+                        db_event.reminders_sent = sent_list
+                        flag_modified(db_event, "reminders_sent")
+                        await session.commit()
+
+                        channel = self.bot.get_channel(db_event.broadcast_channel_id)
+                        if not channel:
+                            try:
+                                channel = await self.bot.fetch_channel(
+                                    db_event.broadcast_channel_id
+                                )
+                            except Exception:
+                                channel = None
+
+                        if channel:
+                            role_mention_str = (
+                                f"<@&{db_event.target_role_id}>"
+                                if db_event.target_role_id
+                                else None
+                            )
+                            start_ctx = {
+                                "event": {
+                                    "name": db_event.name,
+                                    "location": db_event.location,
+                                    "event_url": db_event.event_url,
+                                },
+                                "role_mention": role_mention_str,
+                            }
+                            try:
+                                fallback_start = render_event_template(
+                                    "events/broadcast_started.j2", start_ctx
+                                )
+                                start_text = await generate_dynamic_event_message(
+                                    event_type="started",
+                                    event_name=db_event.name,
+                                    event_description=db_event.description,
+                                    fallback_text=fallback_start,
+                                    role_mention=role_mention_str,
+                                    timeout_sec=120.0,
+                                )
+                                await channel.send(
+                                    start_text,
+                                    allowed_mentions=discord.AllowedMentions(
+                                        everyone=True, roles=True, users=True
+                                    ),
+                                )
+                                logger.info(
+                                    f"Broadcast started dikirim via on_scheduled_event_update untuk '{db_event.name}'"
+                                )
+                            except Exception as start_err:
+                                logger.error(
+                                    f"Failed to send started broadcast on update: {start_err}"
+                                )
+
                     db_event.name = after.name
                     db_event.description = after.description
                     if after.location:

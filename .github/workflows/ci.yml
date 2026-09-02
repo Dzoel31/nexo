@@ -31,3 +31,6 @@ jobs:
 
       - name: Check code linting
         run: uv run ruff check .
+
+      - name: Run unit and integration tests
+        run: uv run pytest -v
