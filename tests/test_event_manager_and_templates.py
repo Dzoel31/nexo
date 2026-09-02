@@ -24,17 +24,16 @@ def test_timezone_wib_conversion():
 
 def test_reminder_interval_pruning():
     now = datetime(2026, 9, 1, 10, 0, tzinfo=timezone.utc)
-    # Event starting in 45 minutes
-    start = now + timedelta(minutes=45)
+    # Event starting in 2 hours (120 minutes)
+    start = now + timedelta(hours=2)
 
-    valid_intervals = prune_reminder_intervals(start_time=start, now_dt=now)
+    valid_intervals = prune_reminder_intervals(
+        start_time=start, now_dt=now, event_type="EVENT"
+    )
     # Rule: trigger_time > now + 5 min.
-    # 45 - 30 = 15 > 5 -> included (30)
-    # 45 - 10 = 35 > 5 -> included (10)
-    # 45 - 60 = -15 < 5 -> pruned (60)
-    assert 30 in valid_intervals
-    assert 10 in valid_intervals
-    assert 60 not in valid_intervals
+    # 120 - 60 = 60 > 5 -> included (60)
+    # 120 - 1440 = -1320 < 5 -> pruned (1440)
+    assert 60 in valid_intervals
     assert 1440 not in valid_intervals
 
 
@@ -42,7 +41,7 @@ def test_human_time_labels():
     assert get_human_time_label(10080) == "H-7 Hari"
     assert get_human_time_label(1440) == "H-1 Hari"
     assert get_human_time_label(60) == "1 Jam Lagi"
-    assert get_human_time_label(10) == "10 Menit Lagi"
+    assert get_human_time_label(720) == "12 Jam Lagi"
 
 
 def test_template_rendering():

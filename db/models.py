@@ -69,8 +69,10 @@ class Message(Base):
 class ScheduledEvent(Base):
     __tablename__ = "scheduled_events"
 
-    # Primary Key menggunakan ID native dari Discord Scheduled Event
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True, index=True)
+    gcal_event_id: Mapped[str | None] = mapped_column(
+        String(255), nullable=True, index=True
+    )
     guild_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
 
     # Konfigurasi Kanal Broadcast
