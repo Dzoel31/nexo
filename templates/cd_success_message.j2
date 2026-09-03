@@ -2,12 +2,18 @@
 {% set target_url = data.release.html_url if data.release and data.release.html_url else (data.workflow_run.html_url if data.workflow_run and data.workflow_run.html_url else data.repository.html_url) %}
 {% set trigger_name = data.release.tag_name if data.release and data.release.tag_name else (data.workflow_run.name if data.workflow_run else 'Continuous Delivery') %}
 {% set desc_intro = "Service **" ~ data.repository.name ~ "** has been successfully deployed to VPS via **" ~ trigger_name ~ "**." %}
+{% set tag_val = data.release.tag_name if data.release and data.release.tag_name else (data.workflow_run.head_branch if data.workflow_run and data.workflow_run.head_branch and data.workflow_run.head_branch != 'main' and data.workflow_run.head_branch != 'master' else '') %}
+{% set release_url = (data.release.html_url if data.release and data.release.html_url else (data.repository.html_url ~ "/releases/tag/" ~ tag_val if tag_val else (data.repository.html_url ~ "/releases"))) %}
 {% if data.release and data.release.body %}
   {% set notes = (data.release.body | compact_markdown | truncate(2000)) %}
   {% set desc_text = desc_intro ~ "\n\n**📝 Release Notes:**\n" ~ notes %}
 {% elif data.workflow_run and data.workflow_run.head_commit and data.workflow_run.head_commit.message %}
-  {% set notes = (data.workflow_run.head_commit.message | compact_markdown | truncate(1000)) %}
-  {% set desc_text = desc_intro ~ "\n\n**📝 Deployed Changes:**\n```text\n" ~ notes ~ "\n```" %}
+  {% set raw_msg = data.workflow_run.head_commit.message | compact_markdown %}
+  {% if "chore(release):" in raw_msg or tag_val %}
+    {% set desc_text = desc_intro ~ "\n\n**📝 Deployed Changes:**\n```text\n" ~ (raw_msg | truncate(1000)) ~ "\n```\n*💡 Rincian perubahan lengkap dapat dilihat melalui tombol **View Changelog** di bawah.*" %}
+  {% else %}
+    {% set desc_text = desc_intro ~ "\n\n**📝 Deployed Changes:**\n```text\n" ~ (raw_msg | truncate(1000)) ~ "\n```" %}
+  {% endif %}
 {% elif data.workflow_run and data.workflow_run.display_title %}
   {% set desc_text = desc_intro ~ "\n\n**📝 Changes:** `" ~ data.workflow_run.display_title ~ "`" %}
 {% else %}
@@ -44,6 +50,17 @@
     {
       "type": 1,
       "components": [
+        {% if tag_val %}
+        {
+          "type": 2,
+          "style": 5,
+          "label": "View Changelog",
+          "url": {{ (release_url | string) | tojson }},
+          "emoji": {
+            "name": "📦"
+          }
+        },
+        {% endif %}
         {
           "type": 2,
           "style": 5,

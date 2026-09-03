@@ -320,7 +320,17 @@ async def webhook_handler(
             target_channel_id = repo_config.get("discord_channel_id")
             repo_key = repo_name or repo_full_name
 
-            if is_cd_success:
+            if event == "release":
+                release_channel_id = int(
+                    os.environ.get("WEBHOOK_RELEASE_NOTES_CHANNEL_ID", 0) or 0
+                )
+                dest_channel_id = release_channel_id or target_channel_id
+                launch_background_task(
+                    cog.send_discord_notification(
+                        message_payload, target_channel_id=dest_channel_id
+                    )
+                )
+            elif is_cd_success:
                 # Defer sending rich CD announcement until AFTER VPS deployment succeeds
                 launch_background_task(
                     cog.trigger_docker_compose(

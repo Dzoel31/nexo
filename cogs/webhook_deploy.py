@@ -211,17 +211,17 @@ class WebhookDeployCog(commands.Cog):
                                 announcement_payload,
                                 target_channel_id=target_channel_id,
                             )
-                            release_notes_channel_id = int(
-                                os.environ.get("WEBHOOK_RELEASE_NOTES_CHANNEL_ID", 0)
+                            devlogs_channel_id = int(
+                                os.environ.get("WEBHOOK_DEVLOGS_CHANNEL_ID", 0)
                                 or 0
                             )
                             if (
-                                release_notes_channel_id
-                                and release_notes_channel_id != target_channel_id
+                                devlogs_channel_id
+                                and devlogs_channel_id != target_channel_id
                             ):
                                 await self.send_discord_notification(
                                     announcement_payload,
-                                    target_channel_id=release_notes_channel_id,
+                                    target_channel_id=devlogs_channel_id,
                                 )
                     else:
                         text_resp = await resp.text()
@@ -241,6 +241,13 @@ class WebhookDeployCog(commands.Cog):
             await self.send_discord_notification(
                 fail_payload, target_channel_id=target_channel_id
             )
+            devlogs_channel_id = int(
+                os.environ.get("WEBHOOK_DEVLOGS_CHANNEL_ID", 0) or 0
+            )
+            if devlogs_channel_id and devlogs_channel_id != target_channel_id:
+                await self.send_discord_notification(
+                    fail_payload, target_channel_id=devlogs_channel_id
+                )
 
     async def trigger_docker_compose(
         self,
@@ -272,16 +279,13 @@ class WebhookDeployCog(commands.Cog):
             await self.send_discord_notification(
                 announcement_payload, target_channel_id=target_channel_id
             )
-            release_notes_channel_id = int(
-                os.environ.get("WEBHOOK_RELEASE_NOTES_CHANNEL_ID", 0) or 0
+            devlogs_channel_id = int(
+                os.environ.get("WEBHOOK_DEVLOGS_CHANNEL_ID", 0) or 0
             )
-            if (
-                release_notes_channel_id
-                and release_notes_channel_id != target_channel_id
-            ):
+            if devlogs_channel_id and devlogs_channel_id != target_channel_id:
                 await self.send_discord_notification(
                     announcement_payload,
-                    target_channel_id=release_notes_channel_id,
+                    target_channel_id=devlogs_channel_id,
                 )
 
 
