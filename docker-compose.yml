@@ -20,10 +20,11 @@ services:
       - MCP_SERVER_URL
       - GOOGLE_SERVICE_ACCOUNT_FILE
       - GOOGLE_CALENDAR_ID
+      - LLAMA_API_KEY
     volumes:
       - ./prompts:/app/prompts
       - ./data:/app/data
-      - /home/admin-iot-hydroponik/ksm-aiot/credentials:/app/credentials:ro
+      - /home/admin-iot-hydroponik/ksm-aiot/nexo/credentials:/app/credentials:ro
       - /home/admin-iot-hydroponik/ksm-aiot:/home/admin-iot-hydroponik/ksm-aiot:ro
 
     deploy:

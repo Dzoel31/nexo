@@ -15,11 +15,18 @@ SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
 
 def _get_service():
-    """Helper to initialize Google Calendar API client."""
-    sa_file = os.environ.get(
+    raw_sa_file = os.environ.get(
         "GOOGLE_SERVICE_ACCOUNT_FILE", "credentials/service_account.json"
     )
-    cal_id = os.environ.get("GOOGLE_CALENDAR_ID")
+    sa_file = raw_sa_file.strip().strip('"').strip("'") if raw_sa_file else ""
+    raw_cal_id = os.environ.get("GOOGLE_CALENDAR_ID")
+    cal_id = raw_cal_id.strip().strip('"').strip("'") if raw_cal_id else ""
+
+    # Check relative to working directory, and fallback to /app prefix if in Docker
+    if sa_file and not os.path.exists(sa_file):
+        alt_path = os.path.join("/app", sa_file.lstrip("/"))
+        if os.path.exists(alt_path):
+            sa_file = alt_path
 
     if not sa_file or not os.path.exists(sa_file):
         raise FileNotFoundError(
