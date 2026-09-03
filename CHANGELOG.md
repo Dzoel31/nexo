@@ -2,6 +2,15 @@
 
 <!-- version list -->
 
+## v1.12.0 (2026-09-03)
+
+### Features
+
+- **deploy**: Route releases to release-notes, mirror cd to dev-logs, add changelog button, and slim
+  dockerfile
+  ([`bb8b875`](https://github.com/ksm-aiot-upnvj/nexo/commit/bb8b87545bfbd129a0f08dd2d89a0b234d0aac9a))
+
+
 ## v1.11.1 (2026-09-03)
 
 ### Bug Fixes
