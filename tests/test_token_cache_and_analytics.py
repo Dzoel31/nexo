@@ -8,6 +8,7 @@ from db.repository import (
     log_token_usage,
 )
 from db.session import async_session
+from tests.conftest import requires_postgres
 
 
 @pytest.mark.asyncio
@@ -36,6 +37,7 @@ async def test_token_lru_cache_and_single_flight():
     assert results[0] > 0
 
 
+@requires_postgres
 @pytest.mark.asyncio
 async def test_token_analytics_sql_aggregation():
     test_user_1 = 888111222333

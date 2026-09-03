@@ -9,8 +9,10 @@ from db.repository import (
     save_message,
 )
 from db.session import async_session
+from tests.conftest import requires_postgres
 
 
+@requires_postgres
 @pytest.mark.asyncio
 async def test_conversation_sliding_ttl():
     test_user_id = 999111222333

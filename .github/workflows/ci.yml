@@ -1,4 +1,4 @@
-name: CI (Lint & Format)
+name: CI (Lint, Format & Test)
 
 on:
   push:
@@ -7,8 +7,24 @@ on:
     branches: [ "main" ]
 
 jobs:
-  lint-and-format:
+  test:
     runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: nexo_dev
+          POSTGRES_PASSWORD: nexo_1234
+          POSTGRES_DB: nexo_db
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -32,5 +48,12 @@ jobs:
       - name: Check code linting
         run: uv run ruff check .
 
+      - name: Run database migrations
+        env:
+          DATABASE_URL: postgresql+asyncpg://nexo_dev:nexo_1234@localhost:5432/nexo_db
+        run: uv run alembic upgrade head
+
       - name: Run unit and integration tests
+        env:
+          DATABASE_URL: postgresql+asyncpg://nexo_dev:nexo_1234@localhost:5432/nexo_db
         run: uv run pytest -v
