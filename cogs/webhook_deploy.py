@@ -212,8 +212,7 @@ class WebhookDeployCog(commands.Cog):
                                 target_channel_id=target_channel_id,
                             )
                             devlogs_channel_id = int(
-                                os.environ.get("WEBHOOK_DEVLOGS_CHANNEL_ID", 0)
-                                or 0
+                                os.environ.get("WEBHOOK_DEVLOGS_CHANNEL_ID", 0) or 0
                             )
                             if (
                                 devlogs_channel_id
