@@ -2,6 +2,33 @@
 
 <!-- version list -->
 
+## v1.11.0 (2026-09-03)
+
+### Documentation
+
+- Update comprehensive architecture guide, folder structure, and project guidelines
+  ([`26a4e2c`](https://github.com/ksm-aiot-upnvj/nexo/commit/26a4e2c6e0d94791984424fc2a9af85dc1687b3f))
+
+### Features
+
+- **events**: Add Google Calendar 2-way sync, dynamic broadcast messages, and interval reminders
+  ([`39ed7ba`](https://github.com/ksm-aiot-upnvj/nexo/commit/39ed7ba48cd07ce6f7f85d548af5efc785bdb170))
+
+- **events**: Implement hybrid event classifier, gcal 2-way sync, race-condition fix, and updated
+  help command
+  ([`b0cfdbe`](https://github.com/ksm-aiot-upnvj/nexo/commit/b0cfdbeb8c660b93494c0adc027f4763a656a90b))
+
+- **orchestrator**: Add bearer auth, dynamic token budgeting, live footer compaction, and sync fixes
+  ([`74ee39a`](https://github.com/ksm-aiot-upnvj/nexo/commit/74ee39a8ca69845c954e41003438731e4a34a512))
+
+- **security**: Implement centralized RBAC authorization, anti-DoS rate limiting, and error
+  sanitization
+  ([`953e1c6`](https://github.com/ksm-aiot-upnvj/nexo/commit/953e1c6eea9118d178bb6ed334eaecc193975a78))
+
+- **webhooks**: Modernize templates with compact markdown, discord link buttons, and view dispatch
+  ([`5697d46`](https://github.com/ksm-aiot-upnvj/nexo/commit/5697d462f2800915b531c87839e13fe45f71c8bb))
+
+
 ## v1.10.0 (2026-09-01)
 
 ### Bug Fixes
