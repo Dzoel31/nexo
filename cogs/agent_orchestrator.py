@@ -10,12 +10,14 @@ from discord import app_commands
 from discord.ext import commands
 
 from db.repository import (
+    check_and_trigger_rolling_summary,
     count_token,
     get_guild_token_leaderboard,
     get_user_token_stats,
 )
 from utils.mcp_client import (
     SYSTEM_PROMPT,
+    ai_client,
     check_services_health,
     get_tools_from_mcp_server,
     process_with_mcp_tools,
@@ -147,33 +149,82 @@ class AgentOrchestrator(commands.Cog):
                             )
                             embed.set_footer(text=footer_text)
 
+                            sent_msg = None
                             if is_expired:
-                                await channel.send(
+                                sent_msg = await channel.send(
                                     content=f"<@{user_id}> Sorry for the long wait! Here is your response:",
                                     embed=embed,
                                 )
                             else:
                                 try:
                                     if is_interaction:
-                                        await ctx_obj.edit_original_response(
+                                        sent_msg = await ctx_obj.edit_original_response(
                                             content=None, embed=embed
                                         )
                                     else:
                                         if wait_msg:
-                                            await wait_msg.edit(
+                                            sent_msg = await wait_msg.edit(
                                                 content=None, embed=embed
                                             )
                                         else:
-                                            await channel.send(
+                                            sent_msg = await channel.send(
                                                 content=f"<@{user_id}>", embed=embed
                                             )
                                 except discord.NotFound, discord.HTTPException:
-                                    await channel.send(
+                                    sent_msg = await channel.send(
                                         content=f"<@{user_id}>", embed=embed
                                     )
 
                             logger.info(
                                 f"Sent response (length: {len(reply)} chars, {footer_text})"
+                            )
+
+                            # Live Footer Compaction Update (Opsi B)
+                            base_footer = footer_text
+
+                            async def on_compaction_start():
+                                try:
+                                    embed.set_footer(
+                                        text=f"{base_footer} • 🧠 Merangkum memori..."
+                                    )
+                                    if is_interaction and hasattr(
+                                        ctx_obj, "edit_original_response"
+                                    ):
+                                        await ctx_obj.edit_original_response(
+                                            embed=embed
+                                        )
+                                    elif sent_msg and hasattr(sent_msg, "edit"):
+                                        await sent_msg.edit(embed=embed)
+                                except Exception as cb_err:
+                                    logger.debug(
+                                        f"Failed to update compaction start footer: {cb_err}"
+                                    )
+
+                            async def on_compaction_end():
+                                try:
+                                    embed.set_footer(
+                                        text=f"{base_footer} • 🧠 Memori terpadatkan"
+                                    )
+                                    if is_interaction and hasattr(
+                                        ctx_obj, "edit_original_response"
+                                    ):
+                                        await ctx_obj.edit_original_response(
+                                            embed=embed
+                                        )
+                                    elif sent_msg and hasattr(sent_msg, "edit"):
+                                        await sent_msg.edit(embed=embed)
+                                except Exception as cb_err:
+                                    logger.debug(
+                                        f"Failed to update compaction end footer: {cb_err}"
+                                    )
+
+                            asyncio.create_task(
+                                check_and_trigger_rolling_summary(
+                                    user_id,
+                                    ai_client,
+                                    on_compaction_start=on_compaction_start,
+                                    on_compaction_end=on_compaction_end,
+                                )
                             )
 
                     except discord.NotFound, discord.HTTPException:
@@ -486,7 +537,7 @@ class AgentOrchestrator(commands.Cog):
                 # Fetch previous messages history safely
                 history_msgs = []
                 total_chars = 0
-                max_chars = int(os.environ.get("MAX_GROUP_CONTEXT_CHARS", 15000))
+                max_chars = int(os.environ.get("MAX_GROUP_CONTEXT_CHARS", 10000))
 
                 try:
                     async for msg in message.channel.history(limit=10, before=message):

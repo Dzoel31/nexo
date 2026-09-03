@@ -48,6 +48,7 @@ class ServerEvents(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self._reminded_cache: set[tuple[int, int]] = set()
+        self._bot_created_event_ids: set[int] = set()
         self.reminder_loop.start()
         self.sync_events_from_gcal.start()
 
@@ -283,6 +284,8 @@ class ServerEvents(commands.Cog):
                     privacy_level=discord.PrivacyLevel.guild_only,
                 )
                 loc_str = event_data.location
+
+            self._bot_created_event_ids.add(discord_event.id)
 
             gcal_data = await create_gcal_event(
                 name=event_data.name,
@@ -1305,7 +1308,64 @@ class ServerEvents(commands.Cog):
                         await session.commit()
                         continue
 
-                    # Buat Scheduled Event di Discord
+                    # Cek apakah event dengan nama & waktu mirip sudah ada di Discord (cegah duplikasi)
+                    existing_discord_event = None
+                    for ev in guild.scheduled_events:
+                        if (
+                            ev.name.strip().lower() == name.strip().lower()
+                            and abs(
+                                (ev.start_time - discord_start_time).total_seconds()
+                            )
+                            < 600
+                        ):
+                            existing_discord_event = ev
+                            break
+
+                    if existing_discord_event:
+                        logger.info(
+                            f"Event '{name}' dari Google Calendar sudah ada di Discord (ID {existing_discord_event.id}). Menghubungkan ke database tanpa membuat duplikat."
+                        )
+                        self._bot_created_event_ids.add(existing_discord_event.id)
+                        res_exist = await session.execute(
+                            select(ScheduledEvent).where(
+                                ScheduledEvent.id == existing_discord_event.id
+                            )
+                        )
+                        db_rec = res_exist.scalar_one_or_none()
+                        if db_rec:
+                            if not db_rec.gcal_event_id:
+                                db_rec.gcal_event_id = gcal_id
+                                await session.commit()
+                        else:
+                            event_url = f"https://discord.com/events/{guild.id}/{existing_discord_event.id}"
+                            pruned_intervals = prune_reminder_intervals(
+                                discord_start_time, now_utc, event_type=ev_type
+                            )
+                            db_record = ScheduledEvent(
+                                id=existing_discord_event.id,
+                                gcal_event_id=gcal_id,
+                                guild_id=guild.id,
+                                broadcast_channel_id=broadcast_channel.id
+                                if broadcast_channel
+                                else guild.id,
+                                broadcast_message_id=None,
+                                name=name,
+                                description=desc,
+                                location=loc,
+                                start_time=start_dt,
+                                end_time=end_dt,
+                                event_url=event_url,
+                                classification_label=classification.label,
+                                is_discord_event=True,
+                                is_active=True,
+                                reminder_intervals=pruned_intervals,
+                                reminders_sent=[],
+                            )
+                            session.add(db_record)
+                            await session.commit()
+                        continue
+
+                    # Buat Scheduled Event baru di Discord
                     try:
                         discord_event = await guild.create_scheduled_event(
                             name=name[:100],
@@ -1316,6 +1376,7 @@ class ServerEvents(commands.Cog):
                             location=loc[:100],
                             privacy_level=discord.PrivacyLevel.guild_only,
                         )
+                        self._bot_created_event_ids.add(discord_event.id)
 
                         event_url = (
                             f"https://discord.com/events/{guild.id}/{discord_event.id}"
@@ -1323,6 +1384,30 @@ class ServerEvents(commands.Cog):
                         pruned_intervals = prune_reminder_intervals(
                             discord_start_time, now_utc, event_type=ev_type
                         )
+
+                        # Simpan ke DB SEGERA untuk mencegah race-condition dengan listener
+                        db_record = ScheduledEvent(
+                            id=discord_event.id,
+                            gcal_event_id=gcal_id,
+                            guild_id=guild.id,
+                            broadcast_channel_id=broadcast_channel.id
+                            if broadcast_channel
+                            else guild.id,
+                            broadcast_message_id=None,
+                            name=name,
+                            description=desc,
+                            location=loc,
+                            start_time=start_dt,
+                            end_time=end_dt,
+                            event_url=event_url,
+                            classification_label=classification.label,
+                            is_discord_event=True,
+                            is_active=True,
+                            reminder_intervals=pruned_intervals,
+                            reminders_sent=[],
+                        )
+                        session.add(db_record)
+                        await session.commit()
 
                         # Render Broadcast Template via Jinja2
                         broadcast_msg = None
@@ -1348,35 +1433,14 @@ class ServerEvents(commands.Cog):
                                         everyone=True, roles=True, users=True
                                     ),
                                 )
+                                if broadcast_msg:
+                                    db_record.broadcast_message_id = broadcast_msg.id
+                                    await session.commit()
                             except Exception as b_err:
                                 logger.error(
                                     f"Failed to send initial event broadcast for GCal event: {b_err}"
                                 )
 
-                        db_record = ScheduledEvent(
-                            id=discord_event.id,
-                            gcal_event_id=gcal_id,
-                            guild_id=guild.id,
-                            broadcast_channel_id=broadcast_channel.id
-                            if broadcast_channel
-                            else guild.id,
-                            broadcast_message_id=broadcast_msg.id
-                            if broadcast_msg
-                            else None,
-                            name=name,
-                            description=desc,
-                            location=loc,
-                            start_time=start_dt,
-                            end_time=end_dt,
-                            event_url=event_url,
-                            classification_label=classification.label,
-                            is_discord_event=True,
-                            is_active=True,
-                            reminder_intervals=pruned_intervals,
-                            reminders_sent=[],
-                        )
-                        session.add(db_record)
-                        await session.commit()
                         logger.info(
                             f"Berhasil mensinkronkan event '{name}' ({ev_type}/{classification.label}) dari Google Calendar ke Discord!"
                         )
@@ -1404,6 +1468,22 @@ class ServerEvents(commands.Cog):
         Syncs event to Google Calendar, saves to PostgreSQL, and broadcasts initial announcement.
         """
         try:
+            # 1. Abaikan event yang dibuat oleh Nexo sendiri (mencegah loop/duplikasi)
+            if event.id in self._bot_created_event_ids:
+                logger.debug(
+                    f"Mengabaikan on_scheduled_event_create untuk bot-created event {event.id}"
+                )
+                return
+
+            if self.bot.user and (
+                event.creator_id == self.bot.user.id
+                or (event.creator and event.creator.id == self.bot.user.id)
+            ):
+                logger.debug(
+                    f"Mengabaikan on_scheduled_event_create: event {event.id} dibuat oleh bot user"
+                )
+                return
+
             # Check if this event is already registered in DB (e.g. created by bot tool)
             async with async_session() as session:
                 res = await session.execute(

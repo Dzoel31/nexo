@@ -386,7 +386,7 @@ class CoreCommands(commands.Cog):
             # channel.purge() automatically handles bulk_delete (<14 days) and single delete (>14 days)
             deleted = await ctx.channel.purge(limit=limit + 2)
             await ctx.send(
-                f"✅ Successfully deleted {len(deleted)} messages!", delete_after=5
+                f"✅ Successfully deleted {len(deleted)} messages!", delete_after=3
             )
         except discord.Forbidden:
             await ctx.send("❌ Bot does not have Manage Messages permission.")

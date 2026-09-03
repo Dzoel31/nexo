@@ -12,7 +12,6 @@ from db.repository import (
     get_or_create_conversation,
     get_conversation_context,
     save_message,
-    check_and_trigger_rolling_summary,
     log_token_usage,
     count_token,
     MessageRole,
@@ -28,8 +27,8 @@ LLAMA_SERVER_URL = os.environ.get(
     "LLAMA_SERVER_URL", "http://localhost:8080/v1/chat/completions"
 )
 LLAMA_BASE_URL = LLAMA_SERVER_URL.replace("/chat/completions", "")
+LLAMA_API_KEY = os.environ.get("LLAMA_API_KEY", "sk-no-key")
 MCP_SERVER_URL = os.environ.get("MCP_SERVER_URL", "http://127.0.0.1:8000")
-MAX_HISTORY_TURNS = 5
 
 # Load System Prompt
 try:
@@ -37,7 +36,7 @@ try:
         SYSTEM_PROMPT = f.read().strip()
 except FileNotFoundError:
     SYSTEM_PROMPT = "You are Nexo, a helpful assistant."
-ai_client = AsyncOpenAI(base_url=LLAMA_BASE_URL, api_key="sk-no-key")
+ai_client = AsyncOpenAI(base_url=LLAMA_BASE_URL, api_key=LLAMA_API_KEY or "sk-no-key")
 
 
 def sanitize_parameters(schema: dict) -> dict:
@@ -234,8 +233,13 @@ async def check_services_health():
         async with aiohttp.ClientSession() as session:
             # Check llama-server
             try:
+                llama_headers = {}
+                if LLAMA_API_KEY and LLAMA_API_KEY != "sk-no-key":
+                    llama_headers["Authorization"] = f"Bearer {LLAMA_API_KEY}"
+
                 async with session.get(
                     f"{LLAMA_BASE_URL.replace('/v1', '')}/health",
+                    headers=llama_headers,
                     timeout=aiohttp.ClientTimeout(total=2),
                 ) as response:
                     if response.status != 200:
@@ -251,14 +255,31 @@ async def check_services_health():
 
             # Check MCP server
             try:
-                async with session.get(
-                    f"{MCP_SERVER_URL}/", timeout=aiohttp.ClientTimeout(total=2)
-                ) as response:
-                    if response.status != 200:
-                        return (
-                            False,
-                            "⚠️ **MCP Server** responded with an error (non-200).",
-                        )
+                mcp_ok = False
+                # 1. Try /sse endpoint
+                try:
+                    async with session.get(
+                        f"{MCP_SERVER_URL.rstrip('/')}/sse",
+                        timeout=aiohttp.ClientTimeout(total=2),
+                    ) as response:
+                        if response.status in (200, 400, 405):
+                            mcp_ok = True
+                except Exception:
+                    pass
+
+                # 2. Try root endpoint if /sse was not reached
+                if not mcp_ok:
+                    async with session.get(
+                        f"{MCP_SERVER_URL}/", timeout=aiohttp.ClientTimeout(total=2)
+                    ) as response:
+                        if response.status in (200, 400, 405):
+                            mcp_ok = True
+
+                if not mcp_ok:
+                    return (
+                        False,
+                        "⚠️ **MCP Server** responded with an error.",
+                    )
             except Exception:
                 return (
                     False,
@@ -433,6 +454,14 @@ async def process_with_mcp_tools(
                         )
                         result = f"Gagal mengeksekusi fungsi '{tool_name}' karena kendala internal. Harap beri tahu pengguna untuk mencoba sesaat lagi."
 
+                    # Ensure result is always a string for OpenAI API message content
+                    if not isinstance(result, str):
+                        result = (
+                            json.dumps(result, ensure_ascii=False)
+                            if isinstance(result, (dict, list))
+                            else str(result)
+                        )
+
                     messages.append(
                         {
                             "role": "tool",
@@ -468,9 +497,12 @@ async def process_with_mcp_tools(
                 # Fallback estimation if usage was not returned
                 if total_prompt_tokens == 0:
                     total_prompt_tokens = sum(
-                        await count_token(str(m.get("content", "")))
-                        for m in messages
-                        if isinstance(m, dict)
+                        [
+                            await count_token(str(m.get("content", "")))
+                            if isinstance(m, dict)
+                            else await count_token(str(getattr(m, "content", "")))
+                            for m in messages
+                        ]
                     )
                 if total_completion_tokens == 0:
                     total_completion_tokens = await count_token(reply)
@@ -505,39 +537,6 @@ async def process_with_mcp_tools(
                         completion_tokens=total_completion_tokens,
                         total_tokens=total_tokens,
                         latency_ms=latency_ms,
-                    )
-                )
-
-                # Setup visual compaction callbacks for Discord message
-                trigger_msg = None
-                if isinstance(ctx_obj, discord.Message):
-                    trigger_msg = ctx_obj
-                elif hasattr(ctx_obj, "message") and isinstance(
-                    ctx_obj.message, discord.Message
-                ):
-                    trigger_msg = ctx_obj.message
-
-                async def on_compaction_start():
-                    if trigger_msg:
-                        try:
-                            await trigger_msg.add_reaction("🧠")
-                        except Exception:
-                            pass
-
-                async def on_compaction_end():
-                    if trigger_msg:
-                        try:
-                            if bot.user:
-                                await trigger_msg.remove_reaction("🧠", bot.user)
-                        except Exception:
-                            pass
-
-                asyncio.create_task(
-                    check_and_trigger_rolling_summary(
-                        user_id,
-                        ai_client,
-                        on_compaction_start=on_compaction_start,
-                        on_compaction_end=on_compaction_end,
                     )
                 )
 

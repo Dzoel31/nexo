@@ -16,6 +16,7 @@ logger = logging.getLogger("event_classifier")
 LLAMA_SERVER_URL = os.environ.get(
     "LLAMA_SERVER_URL", "http://localhost:8080/v1/chat/completions"
 )
+LLAMA_API_KEY = os.environ.get("LLAMA_API_KEY", "")
 
 EventClassificationLabel = Literal[
     "PUBLIC_EVENT",
@@ -24,6 +25,7 @@ EventClassificationLabel = Literal[
     "LOGISTICS",
     "LOGISTICS_OPS",
     "DEADLINE",
+    "PROJECT MEETING",
     "CASUAL_BONDING",
     "WEEKLY_MEETING",
 ]
@@ -116,8 +118,13 @@ class EventClassifier:
     4. Deterministic Safe Fallback
     """
 
-    def __init__(self, llama_url: str = LLAMA_SERVER_URL):
+    def __init__(
+        self,
+        llama_url: str = LLAMA_SERVER_URL,
+        api_key: str = LLAMA_API_KEY,
+    ):
         self.llama_url = llama_url
+        self.api_key = api_key
 
     async def classify_event(
         self,
@@ -251,8 +258,14 @@ class EventClassifier:
         try:
             # Menggunakan ClientTimeout(total=120.0) sesuai rekomendasi keamanan CPU
             timeout = aiohttp.ClientTimeout(total=120.0)
+            headers = {"Content-Type": "application/json"}
+            if self.api_key:
+                headers["Authorization"] = f"Bearer {self.api_key}"
+
             async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(self.llama_url, json=payload) as response:
+                async with session.post(
+                    self.llama_url, json=payload, headers=headers
+                ) as response:
                     if response.status != 200:
                         raw_body = await response.text()
                         logger.warning(

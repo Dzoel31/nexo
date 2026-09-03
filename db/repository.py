@@ -27,13 +27,27 @@ LLAMA_TOKENIZE_URL = os.environ.get(
     "LLAMA_TOKENIZE_URL",
     LLAMA_SERVER_URL.replace("/v1/chat/completions", "/tokenize"),
 )
+LLAMA_API_KEY = os.environ.get("LLAMA_API_KEY", "")
 
-TOTAL_CONTEXT_WINDOW = 8448
-# Base overhead (System prompt + Sanitized tools) is ~1,400 tokens.
-# Ambang batas pemicu perangkuman riwayat pesan: 4,500 token (Total payload aman <= 6,500 < 8,448)
-COMPACTION_THRESHOLD = 4500
-# Target sisa token riwayat aktif yang dipertahankan setelah perangkuman
-TARGET_RETAIN_TOKENS = 1800
+# ---------------------------------------------------------
+# DYNAMIC TOKEN BUDGETING (Gemma 4 E2B - 8,192 Tokens Context)
+# ---------------------------------------------------------
+TOTAL_CONTEXT_WINDOW = int(os.environ.get("TOTAL_CONTEXT_WINDOW", "8192"))
+MAX_COMPLETION_TOKENS = 1024  # Sesuai max_tokens di ai_client
+BASE_OVERHEAD_TOKENS = 1400  # System prompt + Pydantic tools + metadata WIB
+TOOL_BUFFER_TOKENS = 1200  # Buffer aman untuk output eksekusi multi-tool paralel
+
+# Sisa kuota aman yang dialokasikan khusus untuk riwayat obrolan (History Budget):
+USABLE_HISTORY_BUDGET = max(
+    1000,
+    TOTAL_CONTEXT_WINDOW
+    - (MAX_COMPLETION_TOKENS + BASE_OVERHEAD_TOKENS + TOOL_BUFFER_TOKENS),
+)
+
+# Ambang batas pemicu perangkuman riwayat pesan (100% dari budget riwayat, ~55% total context):
+COMPACTION_THRESHOLD = int(USABLE_HISTORY_BUDGET)
+# Target sisa token riwayat aktif yang dipertahankan setelah perangkuman (~40% dari budget riwayat):
+TARGET_RETAIN_TOKENS = int(USABLE_HISTORY_BUDGET * 0.40)
 
 # 24-Hour Sliding TTL for Inactive Conversation Context
 CONVERSATION_TTL = timedelta(hours=24)
@@ -102,8 +116,11 @@ async def count_token(
     token_count = 0
     try:
         sess = session_http if session_http is not None else await get_http_session()
+        headers = {}
+        if LLAMA_API_KEY:
+            headers["Authorization"] = f"Bearer {LLAMA_API_KEY}"
         async with sess.post(
-            LLAMA_TOKENIZE_URL, json={"content": text_content}
+            LLAMA_TOKENIZE_URL, json={"content": text_content}, headers=headers
         ) as response:
             if response.status == 200:
                 data = await response.json()
