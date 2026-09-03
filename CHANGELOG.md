@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.11.1 (2026-09-03)
+
+### Bug Fixes
+
+- **gcal**: Strip quotes from gcal env vars and update docker credentials volume
+  ([`afbe74d`](https://github.com/ksm-aiot-upnvj/nexo/commit/afbe74d6a74d9fcbed47ff901c9b687469eb43f6))
+
+
 ## v1.11.0 (2026-09-03)
 
 ### Documentation
