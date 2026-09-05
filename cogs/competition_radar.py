@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 import discord
@@ -392,7 +393,10 @@ class CompetitionRadar(commands.Cog):
 
     @deadline_reminder_loop.before_loop
     async def before_reminder_loop(self):
-        await self.bot.wait_until_ready()
+        try:
+            await self.bot.wait_until_ready()
+        except RuntimeError, asyncio.CancelledError:
+            pass
 
 
 async def setup(bot: commands.Bot):

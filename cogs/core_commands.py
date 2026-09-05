@@ -1,3 +1,4 @@
+import asyncio
 import os
 import re
 import uuid
@@ -556,7 +557,10 @@ class CoreCommands(commands.Cog):
 
     @check_scheduled_announcements.before_loop
     async def before_announcements(self):
-        await self.bot.wait_until_ready()
+        try:
+            await self.bot.wait_until_ready()
+        except RuntimeError, asyncio.CancelledError:
+            pass
 
     @commands.command()
     async def ping(self, ctx):

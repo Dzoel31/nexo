@@ -1449,17 +1449,23 @@ class ServerEvents(commands.Cog):
 
     @reminder_loop.before_loop
     async def before_reminder_loop(self):
-        if hasattr(self.bot, "wait_until_ready"):
-            res = self.bot.wait_until_ready()
-            if inspect.isawaitable(res):
-                await res
+        try:
+            if hasattr(self.bot, "wait_until_ready"):
+                res = self.bot.wait_until_ready()
+                if inspect.isawaitable(res):
+                    await res
+        except RuntimeError, asyncio.CancelledError:
+            pass
 
     @sync_events_from_gcal.before_loop
     async def before_sync_events_from_gcal(self):
-        if hasattr(self.bot, "wait_until_ready"):
-            res = self.bot.wait_until_ready()
-            if inspect.isawaitable(res):
-                await res
+        try:
+            if hasattr(self.bot, "wait_until_ready"):
+                res = self.bot.wait_until_ready()
+                if inspect.isawaitable(res):
+                    await res
+        except RuntimeError, asyncio.CancelledError:
+            pass
 
     @commands.Cog.listener()
     async def on_scheduled_event_create(self, event: discord.ScheduledEvent):

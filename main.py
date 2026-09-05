@@ -1,5 +1,6 @@
 import os
 import asyncio
+import inspect
 import logging
 import discord
 from discord.ext import commands
@@ -96,6 +97,14 @@ async def main():
 
         await bot.start(TOKEN)
     finally:
+        for cog in list(bot.cogs.values()):
+            if hasattr(cog, "cog_unload"):
+                try:
+                    res = cog.cog_unload()
+                    if inspect.isawaitable(res):
+                        await res
+                except Exception:
+                    pass
         await close_http_session()
         if not bot.is_closed():
             await bot.close()
