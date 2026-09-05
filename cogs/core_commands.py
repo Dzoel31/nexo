@@ -1,9 +1,19 @@
+import os
 import re
+import uuid
+from datetime import datetime, timedelta, timezone
 import discord
 import logging
 from discord import app_commands
-from discord.ext import commands
-from db.repository import reset_conversation_history
+from discord.ext import commands, tasks
+from db.repository import (
+    cancel_scheduled_announcement,
+    create_scheduled_announcement,
+    get_due_scheduled_announcements,
+    list_pending_announcements,
+    mark_announcement_status,
+    reset_conversation_history,
+)
 from utils.auth_helper import has_permission
 from utils.mcp_client import (
     LLAMA_BASE_URL,
@@ -287,9 +297,266 @@ class HelpView(discord.ui.View):
         )
 
 
+WIB = timezone(timedelta(hours=7))
+
+
+def parse_scheduled_time(text: str) -> tuple[datetime | None, str]:
+    """
+    Parses scheduling flags:
+    1. --time "YYYY-MM-DD HH:MM" or --time "HH:MM" (WIB timezone, UTC+7)
+    2. --in <digits><m|h|d> (relative delta e.g. --in 30m, --in 2h, --in 1d)
+    Returns (scheduled_at_utc, cleaned_text)
+    """
+    now_utc = datetime.now(timezone.utc)
+    now_wib = now_utc.astimezone(WIB)
+    scheduled_at: datetime | None = None
+
+    # 1. Check for relative flag: --in 30m / --in 2h / --in 1d
+    in_match = re.search(r"(?<!\S)--in\s+(\d+)([mhd])(?!\S)", text, re.IGNORECASE)
+    if in_match:
+        val = int(in_match.group(1))
+        unit = in_match.group(2).lower()
+        if unit == "m":
+            scheduled_at = now_utc + timedelta(minutes=val)
+        elif unit == "h":
+            scheduled_at = now_utc + timedelta(hours=val)
+        elif unit == "d":
+            scheduled_at = now_utc + timedelta(days=val)
+        text = text[: in_match.start()] + text[in_match.end() :]
+
+    if not scheduled_at:
+        # 2. Check for --time "YYYY-MM-DD HH:MM" or --time '...' or --time "HH:MM"
+        time_match = re.search(
+            r'(?<!\S)--time\s+(?:"([^"]+)"|\'([^\']+)\'|(\S+))(?!\S)',
+            text,
+            re.IGNORECASE,
+        )
+        if time_match:
+            raw_time_str = (
+                time_match.group(1) or time_match.group(2) or time_match.group(3)
+            )
+            parsed_dt = None
+            for fmt in (
+                "%Y-%m-%d %H:%M",
+                "%Y-%m-%d_%H:%M",
+                "%d-%m-%Y %H:%M",
+                "%Y/%m/%d %H:%M",
+            ):
+                try:
+                    dt = datetime.strptime(raw_time_str, fmt)
+                    parsed_dt = dt.replace(tzinfo=WIB)
+                    break
+                except ValueError:
+                    pass
+
+            # Try time only format (HH:MM)
+            if not parsed_dt:
+                try:
+                    t_only = datetime.strptime(raw_time_str, "%H:%M").time()
+                    cand = datetime.combine(now_wib.date(), t_only).replace(tzinfo=WIB)
+                    if cand <= now_wib:
+                        cand += timedelta(days=1)
+                    parsed_dt = cand
+                except ValueError:
+                    pass
+
+            if parsed_dt:
+                scheduled_at = parsed_dt.astimezone(timezone.utc)
+                text = text[: time_match.start()] + text[time_match.end() :]
+
+    text = re.sub(r" +", " ", text).strip()
+    return scheduled_at, text
+
+
+def parse_embed_flags(message_body: str) -> tuple[bool, str | None, str]:
+    """
+    Parses embed flags (--embed or -e) and title flags (--title "Title" or --title Title)
+    from the message body.
+    """
+    is_embed = False
+    title = None
+
+    # Match --title "..." or --title '...' or --title word
+    title_match = re.search(
+        r'(?<!\S)--title\s+(?:"([^"]+)"|\'([^\']+)\'|(\S+))(?!\S)',
+        message_body,
+        re.IGNORECASE,
+    )
+    if title_match:
+        is_embed = True
+        title = title_match.group(1) or title_match.group(2) or title_match.group(3)
+        message_body = (
+            message_body[: title_match.start()] + message_body[title_match.end() :]
+        )
+
+    # Match --embed or -e
+    embed_match = re.search(r"(?<!\S)(--embed|-e)(?!\S)", message_body, re.IGNORECASE)
+    if embed_match:
+        is_embed = True
+        message_body = (
+            message_body[: embed_match.start()] + message_body[embed_match.end() :]
+        )
+
+    # Normalize whitespace
+    message_body = re.sub(r" +", " ", message_body).strip()
+    return is_embed, title, message_body
+
+
+def extract_pings(text: str) -> list[str]:
+    """
+    Extracts broadcast and specific mention tags (@everyone, @here, <@ID>, <@&ID>)
+    so they can be placed in message content to trigger notifications when using embeds.
+    """
+    pings = re.findall(r"(@everyone|@here|<@!?[0-9]+>|<@&[0-9]+>)", text)
+    return list(dict.fromkeys(pings))
+
+
+async def resolve_smart_mentions(guild: discord.Guild, text: str) -> str:
+    """
+    Smart mention resolver for $say command:
+    1. Converts role names (e.g. @Staff-Core, @"Admin") to <@&role_id>
+    2. Converts snowflake IDs (e.g. @123456789012345678 or tag:123...) to <@ID> or <@&ID>
+    3. Converts member names (e.g. @"User Name", @username) to <@member_id>
+    """
+    if not guild or not text:
+        return text
+
+    # 1. Resolve role names (longest first to avoid partial substring clashes)
+    roles = sorted(
+        [r for r in getattr(guild, "roles", []) if not r.is_default()],
+        key=lambda r: len(r.name),
+        reverse=True,
+    )
+    for role in roles:
+        escaped_name = re.escape(role.name)
+        pattern = rf'(?<!<)@(?:"{escaped_name}"|\'{escaped_name}\'|{escaped_name})\b'
+        text = re.sub(pattern, role.mention, text, flags=re.IGNORECASE)
+        if " " in role.name:
+            variant1 = re.escape(role.name.replace(" ", "-"))
+            variant2 = re.escape(role.name.replace(" ", "_"))
+            pattern_v = rf"(?<!<)@(?:{variant1}|{variant2})\b"
+            text = re.sub(pattern_v, role.mention, text, flags=re.IGNORECASE)
+
+    # 2. Resolve Snowflake IDs: @123456789012345678 or id:123... or tag:123...
+    def replace_id(match: re.Match) -> str:
+        raw_id = match.group(1)
+        s_id = int(raw_id)
+        if hasattr(guild, "get_role") and guild.get_role(s_id):
+            return f"<@&{raw_id}>"
+        return f"<@{raw_id}>"
+
+    text = re.sub(r"(?<!<)@(\d{6,20})\b", replace_id, text)
+    text = re.sub(r"\b(?:id|tag):(\d{6,20})\b", replace_id, text, flags=re.IGNORECASE)
+
+    # 3. Resolve Member Names: @"Member Name" or @username
+    name_matches = list(
+        re.finditer(r'(?<!<)@("([^"]+)"|\'([^\']+)\'|([A-Za-z0-9_\.\-]+))', text)
+    )
+    for m in reversed(name_matches):
+        target_name = m.group(2) or m.group(3) or m.group(4)
+        if not target_name:
+            continue
+        lower_name = target_name.lower()
+        if lower_name in ("everyone", "here"):
+            continue
+
+        member = None
+        for member_cand in getattr(guild, "members", []):
+            if (
+                member_cand.name.lower() == lower_name
+                or member_cand.display_name.lower() == lower_name
+                or (
+                    getattr(member_cand, "global_name", None)
+                    and member_cand.global_name.lower() == lower_name
+                )
+            ):
+                member = member_cand
+                break
+
+        if not member and hasattr(guild, "query_members"):
+            try:
+                results = await guild.query_members(target_name, limit=1)
+                if results:
+                    member = results[0]
+            except Exception:
+                pass
+
+        if member:
+            start, end = m.span()
+            text = text[:start] + member.mention + text[end:]
+
+    return text
+
+
 class CoreCommands(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
+        self.check_scheduled_announcements.start()
+
+    def cog_unload(self):
+        self.check_scheduled_announcements.cancel()
+
+    @tasks.loop(seconds=20)
+    async def check_scheduled_announcements(self):
+        """Checks and delivers due scheduled announcements."""
+        try:
+            now_utc = datetime.now(timezone.utc)
+            due_announcements = await get_due_scheduled_announcements(now_utc)
+            for item in due_announcements:
+                guild = self.bot.get_guild(item.guild_id)
+                if not guild:
+                    continue
+                channel = guild.get_channel(item.channel_id)
+                if not channel:
+                    await mark_announcement_status(item.id, "failed")
+                    continue
+
+                try:
+                    allowed_mentions = discord.AllowedMentions(
+                        everyone=True, roles=True, users=True
+                    )
+                    final_body = await resolve_smart_mentions(guild, item.content)
+
+                    if item.is_embed:
+                        pings = extract_pings(final_body)
+                        ping_content = " ".join(pings) if pings else None
+                        embed = discord.Embed(
+                            title=item.title,
+                            description=final_body,
+                            color=discord.Color.from_rgb(0, 168, 252),
+                        )
+                        footer_text = f"Pengumuman • {guild.name}"
+                        if getattr(guild, "icon", None):
+                            embed.set_footer(text=footer_text, icon_url=guild.icon.url)
+                        else:
+                            embed.set_footer(text=footer_text)
+
+                        await channel.send(
+                            content=ping_content,
+                            embed=embed,
+                            allowed_mentions=allowed_mentions,
+                        )
+                    else:
+                        await channel.send(
+                            final_body,
+                            allowed_mentions=allowed_mentions,
+                        )
+
+                    await mark_announcement_status(item.id, "sent")
+                    logger.info(
+                        f"Delivered scheduled announcement {item.id} to #{channel.name}"
+                    )
+                except Exception as send_err:
+                    logger.error(
+                        f"Failed to deliver scheduled announcement {item.id}: {send_err}"
+                    )
+                    await mark_announcement_status(item.id, "failed")
+        except Exception as e:
+            logger.error(f"Error in check_scheduled_announcements loop: {e}")
+
+    @check_scheduled_announcements.before_loop
+    async def before_announcements(self):
+        await self.bot.wait_until_ready()
 
     @commands.command()
     async def ping(self, ctx):
@@ -338,9 +605,15 @@ class CoreCommands(commands.Cog):
         # Check llama-server
         logger.info(f"Server llama.cpp: {LLAMA_BASE_URL.replace('/v1', '')}")
         try:
+            api_key = os.environ.get("LLAMA_API_KEY", "").strip("\"' \r\n")
+            llama_headers = {}
+            if api_key and api_key != "sk-no-key":
+                llama_headers["Authorization"] = f"Bearer {api_key}"
+
             async with aiohttp.ClientSession() as session:
                 async with session.get(
                     f"{LLAMA_BASE_URL.replace('/v1', '')}/health",
+                    headers=llama_headers,
                     timeout=aiohttp.ClientTimeout(total=5),
                 ) as response:
                     if response.status == 200:
@@ -533,7 +806,10 @@ class CoreCommands(commands.Cog):
     async def say(self, ctx, *, text: str = None):
         """
         Sends a message to a destination channel on behalf of the bot.
-        Usage: $say to #channel <message> or $say to <channel_id/name> <message>
+        Usage:
+          $say to #channel <message>
+          $say to #channel --embed <message>
+          $say to #channel --embed --title "Judul" <message>
         """
         if not has_permission(
             ctx,
@@ -547,11 +823,70 @@ class CoreCommands(commands.Cog):
 
         if not text or not text.strip():
             return await ctx.send(
-                "ℹ️ **Format Penggunaan:** `$say to #channel <pesan>` atau `$say to <channel_id> <pesan>`",
-                delete_after=8,
+                "ℹ️ **Format Penggunaan:**\n"
+                "• Kirim sekarang: `$say to #channel <pesan>`\n"
+                '• Kirim Embed: `$say to #channel --embed [--title "Judul"] <pesan>`\n'
+                '• Jadwalkan: `$say to #channel --time "YYYY-MM-DD HH:MM" <pesan>` atau `--in <30m|2h|1d>`\n'
+                "• Cek antrean jadwal: `$say list`\n"
+                "• Batalkan jadwal: `$say cancel <ID>`",
+                delete_after=12,
             )
 
         content = text.strip()
+
+        # Handle '$say list'
+        if content.lower() == "list":
+            pending = await list_pending_announcements(ctx.guild.id)
+            if not pending:
+                return await ctx.send(
+                    "ℹ️ Tidak ada pengumuman yang sedang menunggu jadwal.",
+                    delete_after=8,
+                )
+            embed = discord.Embed(
+                title="⏰ Antrean Pengumuman Terjadwal",
+                color=discord.Color.blue(),
+            )
+            for idx, a in enumerate(pending[:10], start=1):
+                ch = ctx.guild.get_channel(a.channel_id)
+                ch_mention = ch.mention if ch else f"`{a.channel_id}`"
+                ts = int(a.scheduled_at.timestamp())
+                snippet = a.content[:80] + "..." if len(a.content) > 80 else a.content
+                embed.add_field(
+                    name=f"{idx}. ID: `{a.id}`",
+                    value=(
+                        f"• **Channel:** {ch_mention}\n"
+                        f"• **Waktu:** <t:{ts}:F> (<t:{ts}:R>)\n"
+                        f"• **Format:** {'Embed' if a.is_embed else 'Teks Biasa'}\n"
+                        f"• **Pesan:** {snippet}"
+                    ),
+                    inline=False,
+                )
+            return await ctx.send(embed=embed)
+
+        # Handle '$say cancel <id>'
+        if content.lower().startswith("cancel "):
+            raw_id = content.split(maxsplit=1)[1].strip()
+            try:
+                announcement_uuid = uuid.UUID(raw_id)
+                success = await cancel_scheduled_announcement(
+                    announcement_uuid, ctx.guild.id
+                )
+                if success:
+                    return await ctx.send(
+                        f"✅ Pengumuman dengan ID `{raw_id}` berhasil dibatalkan.",
+                        delete_after=8,
+                    )
+                else:
+                    return await ctx.send(
+                        f"❌ Pengumuman dengan ID `{raw_id}` tidak ditemukan atau sudah dikirim.",
+                        delete_after=8,
+                    )
+            except ValueError:
+                return await ctx.send(
+                    "❌ Format ID tidak valid. Harap gunakan format UUID yang benar.",
+                    delete_after=6,
+                )
+
         # Handle 'to' prefix if present
         if content.lower().startswith("to "):
             content = content[3:].strip()
@@ -565,6 +900,15 @@ class CoreCommands(commands.Cog):
             )
 
         channel_identifier, message_body = parts[0], parts[1].strip()
+        if not message_body:
+            return await ctx.send("⚠️ Pesan tidak boleh kosong!", delete_after=5)
+
+        # Parse embed flags and options
+        is_embed, title, message_body = parse_embed_flags(message_body)
+
+        # Smart Mention Resolution
+        message_body = await resolve_smart_mentions(ctx.guild, message_body)
+
         if not message_body:
             return await ctx.send("⚠️ Pesan tidak boleh kosong!", delete_after=5)
 
@@ -587,6 +931,40 @@ class CoreCommands(commands.Cog):
                 delete_after=6,
             )
 
+        # Check for scheduling flags (--time or --in)
+        scheduled_at, message_body = parse_scheduled_time(message_body)
+        if scheduled_at:
+            now_utc = datetime.now(timezone.utc)
+            if scheduled_at <= now_utc:
+                return await ctx.send(
+                    "⚠️ Waktu jadwal harus berada di masa depan!", delete_after=6
+                )
+
+            # Try deleting invocation message
+            try:
+                await ctx.message.delete()
+            except Exception:
+                pass
+
+            announcement = await create_scheduled_announcement(
+                guild_id=ctx.guild.id,
+                channel_id=target_channel.id,
+                author_id=ctx.author.id,
+                content=message_body,
+                scheduled_at=scheduled_at,
+                is_embed=is_embed,
+                title=title,
+            )
+            ts = int(scheduled_at.timestamp())
+            return await ctx.send(
+                f"✅ **Pengumuman Berhasil Dijadwalkan!**\n"
+                f"• **Channel Tujuan:** {target_channel.mention}\n"
+                f"• **Waktu Pengiriman:** <t:{ts}:F> (<t:{ts}:R>)\n"
+                f"• **Format:** {'Embed' if is_embed else 'Teks Biasa'}\n"
+                f"• **ID:** `{announcement.id}` (Gunakan `$say cancel {announcement.id}` jika ingin membatalkan)",
+                delete_after=15,
+            )
+
         try:
             # Delete invocation message if possible
             try:
@@ -594,14 +972,38 @@ class CoreCommands(commands.Cog):
             except Exception:
                 pass
 
-            await target_channel.send(
-                message_body,
-                allowed_mentions=discord.AllowedMentions(
-                    everyone=True, roles=True, users=True
-                ),
+            allowed_mentions = discord.AllowedMentions(
+                everyone=True, roles=True, users=True
             )
+
+            if is_embed:
+                pings = extract_pings(message_body)
+                ping_content = " ".join(pings) if pings else None
+
+                embed = discord.Embed(
+                    title=title,
+                    description=message_body,
+                    color=discord.Color.from_rgb(0, 168, 252),
+                )
+                footer_text = f"Pengumuman • {ctx.guild.name}"
+                if getattr(ctx.guild, "icon", None):
+                    embed.set_footer(text=footer_text, icon_url=ctx.guild.icon.url)
+                else:
+                    embed.set_footer(text=footer_text)
+
+                await target_channel.send(
+                    content=ping_content,
+                    embed=embed,
+                    allowed_mentions=allowed_mentions,
+                )
+            else:
+                await target_channel.send(
+                    message_body,
+                    allowed_mentions=allowed_mentions,
+                )
+
             logger.info(
-                f"User {ctx.author.name} (ID: {ctx.author.id}) used $say to #{target_channel.name}"
+                f"User {ctx.author.name} (ID: {ctx.author.id}) used $say to #{target_channel.name} (embed={is_embed})"
             )
         except discord.Forbidden:
             await ctx.send(

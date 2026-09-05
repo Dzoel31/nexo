@@ -65,12 +65,15 @@ Berdasarkan pertimbangan perangkat keras (4 Core CPU, sisa RAM 5 GB), pengembang
 - **Chat Summarizer (Bertingkat/Paginated):** Bot **dilarang keras** menarik 500 chat sekaligus. Bot hanya mengambil 20-30 pesan terakhir per eksekusi, atau merangkum secara parsial lalu digabung (Rangkuman dari Rangkuman).
 - **Research Assistant (Jurnal/Artikel PDF):** Bot tidak bisa membaca 1 PDF utuh di *context window*. Wajib menggunakan RAG (*Retrieval-Augmented Generation*). PDF dipecah (*chunking*), lalu saat user bertanya, bot men-search vektor untuk menarik 3-4 paragraf yang relevan saja.
 - **Notulensi Pintar:** Menerima *pointer* ringkas dari pengurus di akhir rapat, lalu merapikannya menjadi format notula (Keputusan & Action Items).
+- **AI Weekly Standup & Progress Summarizer (Gemma 4):** Sistem rekap progres mingguan per divisi via thread Discord. Setiap pekan, anggota/lead divisi mengisi progres mingguan dan kendala (*blockers*). Nexo (Gemma 4) merangkumnya menjadi *Executive Summary* terstruktur untuk BPH / Ketua KSM. *(Status: Rencana masa depan ketika aktivitas KSM sudah stabil).*
 
 ### B. Komunitas & Produktivitas
 - **Pengingat Rapat & Kalender:** *Blast* notifikasi rapat (bisa statis tanpa LLM agar hemat *context window*).
-- **Absensi/Presensi Digital (Voice Channel):** Fitur presensi cerdas di mana bot tidak perlu ikut masuk dan *stay* di Voice Channel (VC). Cukup panggil `/hadir_vc`, lalu bot akan membaca API Discord untuk mendata siapa saja *member* yang sedang *nongkrong* di VC tersebut dan langsung mencatatnya ke Database.
+- **VC Meeting Attendance Tracker (Koordinasi PSDM & Akademik):** Peningkatan dari sekadar cek VC pasif menjadi pencatatan presensi rapat dinamis. Pengurus memulai sesi (`/meeting start [nama_rapat]`) dan mengakhiri (`/meeting end`), Nexo secara otomatis mencatat waktu join, durasi kehadiran per anggota di Voice Channel, dan menghasilkan rekap absensi rapat (Embed/CSV) untuk keperluan administrasi presensi organisasi.
+- **Interactive Role Picker & Onboarding Divisi (Koordinasi PSDM):** Komponen interaktif terpadu (Discord Select Menu & Buttons) di channel `#pilih-role` / `#welcome`. Memungkinkan anggota baru memilih divisi minat (`🤖 Divisi AI`, `📡 Divisi IoT`, `💻 Divisi Web/Mobile`, `🎨 Humas/Media`) secara mandiri tanpa membebani admin server.
 - **Gamifikasi & Poin Keaktifan:** Penghitungan poin (Leaderboard) dari frekuensi menjawab di *help channel* atau dari kontribusi/komit di GitHub.
 - **Sistem Onboarding:** Sambutan anggota baru otomatis via DM/Channel.
+- **Competition & Hackathon Radar:** Manajemen info lomba dan kompetisi teknologi (Gemastik, Hackathon, PKM, IoT Challenge) dengan reminder countdown berkala menuju batas akhir pendaftaran.
 
 ### C. Alat Bantu Riset & Lab
 - **Inventaris Lab IoT:** Cek ketersediaan sensor (ESP32, DHT22) langsung ke database.
@@ -81,6 +84,7 @@ Berdasarkan pertimbangan perangkat keras (4 Core CPU, sisa RAM 5 GB), pengembang
 
 ### D. Utilitas Server & Manajemen Proyek
 - **Polling Dinamis:** Memfasilitasi musyawarah atau penentuan jadwal lewat sistem *voting* yang rapi dan bisa dibatasi khusus *role* tertentu.
+- **Scheduled Announcement (`$say` Scheduler):** Penjadwalan pengumuman dan pesan siaran bot di channel tertentu menggunakan parameter waktu `--time` atau `--in`.
 - **Ruang Proyek Sementara (Discord Threads):** Daripada membuat *Text Channel* baru yang membuat server berantakan, anggota bisa *request* pembuatan **Discord Thread** khusus tim lomba/proyek. Kelebihannya, *Thread* akan **otomatis diarsipkan (auto-archive)** oleh Discord sendiri jika tidak ada yang *chat* lagi (misal setelah 1 minggu), sehingga server KSM tetap bersih tanpa membebani memori bot.
 
 ---
@@ -124,6 +128,11 @@ Berdasarkan pertimbangan perangkat keras (4 Core CPU, sisa RAM 5 GB), pengembang
   - [x] Tool `list_discord_events` (output markdown padat token dalam zona waktu WIB).
   - [x] Tool `end_discord_event` dengan 3-tier target resolution & Discord lifecycle state machine.
 - [ ] Pembuatan Cog *Lab Assistant*: *Tool* untuk query Inventaris Lab IoT dan monitoring status Sensor (*Snapshot* suhu/kelembaban).
+- [ ] **VC Meeting Attendance Tracker** (Koordinasi Divisi PSDM & Akademik): Monitoring sesi Voice Channel, kalkulasi durasi kehadiran per anggota secara dinamis, dan rekapitulasi presensi rapat otomatis.
+- [ ] **Interactive Role Picker & Onboarding Divisi** (Koordinasi Divisi PSDM): Implementasi persistent UI View (Select Menu/Buttons) untuk self-assign role divisi anggota baru.
+- [ ] **AI Weekly Standup & Progress Summarizer** (Gemma 4): Pipeline ekstraksi progres divisi mingguan dan automated executive summary untuk BPH / Ketua KSM.
+- [ ] **Scheduled Announcement (`$say` Scheduler)**: Dukungan pengiriman pengumuman terjadwal berbasis parameter `--time` atau `--in` (WIB).
+- [ ] **Competition & Hackathon Radar (`/lomba`)**: Manajemen info lomba/kompetisi AI & IoT dengan sistem countdown reminder berkala (H-7, H-3, H-1).
 - [ ] (Future) Pembuatan *tool* eksekusi fisik (contoh: MQTT *publish* ke relay ESP32) berserta *role permission checker*.
 
 **WEB UI DASHBOARD (ADMIN PANEL)**

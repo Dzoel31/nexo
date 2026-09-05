@@ -27,7 +27,7 @@ LLAMA_SERVER_URL = os.environ.get(
     "LLAMA_SERVER_URL", "http://localhost:8080/v1/chat/completions"
 )
 LLAMA_BASE_URL = LLAMA_SERVER_URL.replace("/chat/completions", "")
-LLAMA_API_KEY = os.environ.get("LLAMA_API_KEY", "sk-no-key")
+LLAMA_API_KEY = os.environ.get("LLAMA_API_KEY", "").strip("\"' \r\n")
 MCP_SERVER_URL = os.environ.get("MCP_SERVER_URL", "http://127.0.0.1:8000")
 
 # Load System Prompt
@@ -234,8 +234,9 @@ async def check_services_health():
             # Check llama-server
             try:
                 llama_headers = {}
-                if LLAMA_API_KEY and LLAMA_API_KEY != "sk-no-key":
-                    llama_headers["Authorization"] = f"Bearer {LLAMA_API_KEY}"
+                key = os.environ.get("LLAMA_API_KEY", LLAMA_API_KEY).strip("\"' \r\n")
+                if key and key != "sk-no-key":
+                    llama_headers["Authorization"] = f"Bearer {key}"
 
                 async with session.get(
                     f"{LLAMA_BASE_URL.replace('/v1', '')}/health",

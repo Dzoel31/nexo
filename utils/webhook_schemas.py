@@ -29,7 +29,14 @@ class Repository(BaseModel):
     private: bool
     html_url: HttpUrl
     owner: User
-    homepage: Optional[HttpUrl] = None
+    homepage: Optional[str] = None
+
+    @field_validator("homepage", mode="before")
+    @classmethod
+    def empty_str_to_none(cls, value):
+        if not value or (isinstance(value, str) and not value.strip()):
+            return None
+        return str(value).strip()
 
 
 class DockerServiceSchema(BaseModel):
@@ -91,7 +98,15 @@ class Branch(BaseModel):
 
 class PullRequest(BaseModel):
     html_url: HttpUrl
-    issue_url: Optional[HttpUrl] = None
+    issue_url: Optional[str] = None
+
+    @field_validator("issue_url", mode="before")
+    @classmethod
+    def empty_issue_url_to_none(cls, value):
+        if not value or (isinstance(value, str) and not value.strip()):
+            return None
+        return str(value).strip()
+
     number: int
     state: str
     title: str

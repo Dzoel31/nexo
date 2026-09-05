@@ -9,10 +9,19 @@ import uuid
 from uuid import UUID
 
 import aiohttp
-from sqlalchemy import text
+from sqlalchemy import JSON, bindparam, text
 
-from db.models import Conversation, MessageRole
-from db.schemas import LLMMessagePayload, MessageCreate, MessageRead
+from db.models import MessageRole
+from db.schemas import (
+    CompetitionCreate,
+    CompetitionRead,
+    ConversationRead,
+    LLMMessagePayload,
+    MessageCreate,
+    MessageRead,
+    ScheduledAnnouncementCreate,
+    ScheduledAnnouncementRead,
+)
 from db.session import async_session
 
 logger = logging.getLogger("chat_repository")
@@ -27,7 +36,7 @@ LLAMA_TOKENIZE_URL = os.environ.get(
     "LLAMA_TOKENIZE_URL",
     LLAMA_SERVER_URL.replace("/v1/chat/completions", "/tokenize"),
 )
-LLAMA_API_KEY = os.environ.get("LLAMA_API_KEY", "")
+LLAMA_API_KEY = os.environ.get("LLAMA_API_KEY", "").strip("\"' \r\n")
 
 # ---------------------------------------------------------
 # DYNAMIC TOKEN BUDGETING (Gemma 4 E2B - 8,192 Tokens Context)
@@ -117,8 +126,9 @@ async def count_token(
     try:
         sess = session_http if session_http is not None else await get_http_session()
         headers = {}
-        if LLAMA_API_KEY:
-            headers["Authorization"] = f"Bearer {LLAMA_API_KEY}"
+        api_key = os.environ.get("LLAMA_API_KEY", LLAMA_API_KEY).strip("\"' \r\n")
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
         async with sess.post(
             LLAMA_TOKENIZE_URL, json={"content": text_content}, headers=headers
         ) as response:
@@ -127,6 +137,10 @@ async def count_token(
                 tokens = data.get("tokens", [])
                 token_count = len(tokens)
             else:
+                if response.status == 401:
+                    logger.warning(
+                        "[Tokenize] llama-server returned 401 Unauthorized: Invalid API Key. Periksa LLAMA_API_KEY."
+                    )
                 token_count = max(1, len(text_content) // 4)
     except Exception:
         # Fallback estimation if tokenize endpoint offline or fails
@@ -149,7 +163,7 @@ async def count_token(
 # ---------------------------------------------------------
 async def get_or_create_conversation(
     user_id: int, channel_id: int | None = None
-) -> Conversation:
+) -> ConversationRead:
     """
     Getting an active conversation based on user_id or creating a new one using raw SQL.
     Implements 24-hour sliding TTL expiration for inactive conversations.
@@ -186,16 +200,15 @@ async def get_or_create_conversation(
             logger.info(
                 f"Created new conversation for user {user_id} (ID: {created_row['id']})"
             )
-            conv = Conversation(
+            return ConversationRead(
                 id=created_row["id"],
                 user_id=created_row["user_id"],
                 channel_id=created_row["channel_id"],
                 summary=created_row["summary"],
                 created_at=created_row["created_at"],
                 updated_at=created_row["updated_at"],
+                messages=[],
             )
-            conv.messages = []
-            return conv
 
         conv_id = row["id"]
         last_activity = row["updated_at"]
@@ -225,16 +238,15 @@ async def get_or_create_conversation(
                     },
                 )
                 await session.commit()
-                conv = Conversation(
+                return ConversationRead(
                     id=conv_id,
                     user_id=row["user_id"],
                     channel_id=channel_id or row["channel_id"],
                     summary=None,
                     created_at=row["created_at"],
                     updated_at=now_utc,
+                    messages=[],
                 )
-                conv.messages = []
-                return conv
 
         # Active conversation: update last_activity and channel_id
         await session.execute(
@@ -250,15 +262,15 @@ async def get_or_create_conversation(
             },
         )
         await session.commit()
-        conv = Conversation(
+        return ConversationRead(
             id=conv_id,
             user_id=row["user_id"],
             channel_id=channel_id or row["channel_id"],
             summary=row["summary"],
             created_at=row["created_at"],
             updated_at=now_utc,
+            messages=[],
         )
-        return conv
 
 
 async def save_message(
@@ -740,3 +752,251 @@ async def get_guild_token_leaderboard(
         }
 
         return leaderboard, guild_summary
+
+
+# ---------------------------------------------------------
+# SCHEDULED ANNOUNCEMENTS REPOSITORY (RAW SQL)
+# ---------------------------------------------------------
+async def create_scheduled_announcement(
+    guild_id: int,
+    channel_id: int,
+    author_id: int,
+    content: str,
+    scheduled_at: datetime,
+    is_embed: bool = False,
+    title: str | None = None,
+) -> ScheduledAnnouncementRead:
+    """Validates and creates a scheduled announcement using raw SQL."""
+    payload = ScheduledAnnouncementCreate(
+        guild_id=guild_id,
+        channel_id=channel_id,
+        author_id=author_id,
+        content=content,
+        scheduled_at=scheduled_at,
+        is_embed=is_embed,
+        title=title,
+    )
+    new_id = uuid.uuid4()
+    now_utc = datetime.now(timezone.utc)
+    async with async_session() as session:
+        insert_sql = text("""
+            INSERT INTO scheduled_announcements (
+                id, guild_id, channel_id, author_id, content, is_embed, title, scheduled_at, status, created_at
+            )
+            VALUES (
+                :id, :guild_id, :channel_id, :author_id, :content, :is_embed, :title, :scheduled_at, 'pending', :now_utc
+            )
+            RETURNING id, guild_id, channel_id, author_id, content, is_embed, title, scheduled_at, status, created_at
+        """)
+        res = await session.execute(
+            insert_sql,
+            {
+                "id": new_id,
+                "guild_id": payload.guild_id,
+                "channel_id": payload.channel_id,
+                "author_id": payload.author_id,
+                "content": payload.content,
+                "is_embed": payload.is_embed,
+                "title": payload.title,
+                "scheduled_at": payload.scheduled_at,
+                "now_utc": now_utc,
+            },
+        )
+        await session.commit()
+        row = res.mappings().first()
+        return ScheduledAnnouncementRead.model_validate(dict(row))
+
+
+async def get_due_scheduled_announcements(
+    now_utc: datetime,
+) -> list[ScheduledAnnouncementRead]:
+    """Retrieves all pending announcements scheduled on or before now_utc using raw SQL."""
+    async with async_session() as session:
+        select_sql = text("""
+            SELECT id, guild_id, channel_id, author_id, content, is_embed, title, scheduled_at, status, created_at
+            FROM scheduled_announcements
+            WHERE status = 'pending' AND scheduled_at <= :now_utc
+            ORDER BY scheduled_at ASC
+        """)
+        result = await session.execute(select_sql, {"now_utc": now_utc})
+        rows = result.mappings().all()
+        return [ScheduledAnnouncementRead.model_validate(dict(r)) for r in rows]
+
+
+async def mark_announcement_status(announcement_id: UUID, status: str) -> None:
+    """Updates the status of a scheduled announcement using raw SQL."""
+    async with async_session() as session:
+        update_sql = text("""
+            UPDATE scheduled_announcements
+            SET status = :status
+            WHERE id = :announcement_id
+        """)
+        await session.execute(
+            update_sql, {"status": status, "announcement_id": announcement_id}
+        )
+        await session.commit()
+
+
+async def list_pending_announcements(guild_id: int) -> list[ScheduledAnnouncementRead]:
+    """Lists all pending announcements for a guild ordered by scheduled_at using raw SQL."""
+    async with async_session() as session:
+        select_sql = text("""
+            SELECT id, guild_id, channel_id, author_id, content, is_embed, title, scheduled_at, status, created_at
+            FROM scheduled_announcements
+            WHERE guild_id = :guild_id AND status = 'pending'
+            ORDER BY scheduled_at ASC
+        """)
+        result = await session.execute(select_sql, {"guild_id": guild_id})
+        rows = result.mappings().all()
+        return [ScheduledAnnouncementRead.model_validate(dict(r)) for r in rows]
+
+
+async def cancel_scheduled_announcement(announcement_id: UUID, guild_id: int) -> bool:
+    """Cancels a pending announcement using raw SQL."""
+    async with async_session() as session:
+        update_sql = text("""
+            UPDATE scheduled_announcements
+            SET status = 'cancelled'
+            WHERE id = :announcement_id AND guild_id = :guild_id AND status = 'pending'
+        """)
+        res = await session.execute(
+            update_sql, {"announcement_id": announcement_id, "guild_id": guild_id}
+        )
+        await session.commit()
+        return res.rowcount > 0
+
+
+# ---------------------------------------------------------
+# COMPETITIONS (HACKATHON RADAR) REPOSITORY (RAW SQL)
+# ---------------------------------------------------------
+async def create_competition(
+    guild_id: int,
+    name: str,
+    category: str,
+    deadline: datetime,
+    channel_id: int,
+    created_by: int,
+    registration_url: str | None = None,
+    guidebook_url: str | None = None,
+    description: str | None = None,
+    target_role_id: int | None = None,
+) -> CompetitionRead:
+    """Validates and registers a new competition into radar using raw SQL."""
+    payload = CompetitionCreate(
+        guild_id=guild_id,
+        name=name,
+        category=category,
+        deadline=deadline,
+        channel_id=channel_id,
+        created_by=created_by,
+        registration_url=registration_url,
+        guidebook_url=guidebook_url,
+        description=description,
+        target_role_id=target_role_id,
+    )
+    now_utc = datetime.now(timezone.utc)
+    async with async_session() as session:
+        insert_sql = text("""
+            INSERT INTO competitions (
+                guild_id, name, category, deadline, channel_id, created_by,
+                registration_url, guidebook_url, description, target_role_id,
+                reminders_sent, is_active, created_at
+            )
+            VALUES (
+                :guild_id, :name, :category, :deadline, :channel_id, :created_by,
+                :registration_url, :guidebook_url, :description, :target_role_id,
+                :reminders_sent, TRUE, :now_utc
+            )
+            RETURNING id, guild_id, name, category, deadline, channel_id, created_by,
+                      registration_url, guidebook_url, description, target_role_id,
+                      reminders_sent, is_active, created_at
+        """).bindparams(bindparam("reminders_sent", type_=JSON))
+
+        res = await session.execute(
+            insert_sql,
+            {
+                "guild_id": payload.guild_id,
+                "name": payload.name,
+                "category": payload.category,
+                "deadline": payload.deadline,
+                "channel_id": payload.channel_id,
+                "created_by": payload.created_by,
+                "registration_url": payload.registration_url,
+                "guidebook_url": payload.guidebook_url,
+                "description": payload.description,
+                "target_role_id": payload.target_role_id,
+                "reminders_sent": [],
+                "now_utc": now_utc,
+            },
+        )
+        await session.commit()
+        row = res.mappings().first()
+        return CompetitionRead.model_validate(dict(row))
+
+
+async def list_active_competitions(guild_id: int) -> list[CompetitionRead]:
+    """Retrieves all active competitions for a guild ordered by deadline using raw SQL."""
+    async with async_session() as session:
+        select_sql = text("""
+            SELECT id, guild_id, name, category, deadline, channel_id, created_by,
+                   registration_url, guidebook_url, description, target_role_id,
+                   reminders_sent, is_active, created_at
+            FROM competitions
+            WHERE guild_id = :guild_id AND is_active = TRUE
+            ORDER BY deadline ASC
+        """)
+        result = await session.execute(select_sql, {"guild_id": guild_id})
+        rows = result.mappings().all()
+        return [CompetitionRead.model_validate(dict(r)) for r in rows]
+
+
+async def get_competition_by_id(comp_id: int, guild_id: int) -> CompetitionRead | None:
+    """Retrieves a single active competition by ID using raw SQL."""
+    async with async_session() as session:
+        select_sql = text("""
+            SELECT id, guild_id, name, category, deadline, channel_id, created_by,
+                   registration_url, guidebook_url, description, target_role_id,
+                   reminders_sent, is_active, created_at
+            FROM competitions
+            WHERE id = :comp_id AND guild_id = :guild_id
+            LIMIT 1
+        """)
+        result = await session.execute(
+            select_sql, {"comp_id": comp_id, "guild_id": guild_id}
+        )
+        row = result.mappings().first()
+        return CompetitionRead.model_validate(dict(row)) if row else None
+
+
+async def delete_competition(comp_id: int, guild_id: int) -> bool:
+    """Soft deletes/deactivates a competition using raw SQL."""
+    async with async_session() as session:
+        update_sql = text("""
+            UPDATE competitions
+            SET is_active = FALSE
+            WHERE id = :comp_id AND guild_id = :guild_id
+        """)
+        res = await session.execute(
+            update_sql, {"comp_id": comp_id, "guild_id": guild_id}
+        )
+        await session.commit()
+        return res.rowcount > 0
+
+
+async def update_competition_reminders(comp_id: int, reminders_sent: list[int]) -> None:
+    """Updates competition reminder timestamps using raw SQL with JSON parameter binding."""
+    async with async_session() as session:
+        stmt = text("""
+            UPDATE competitions
+            SET reminders_sent = :reminders_sent
+            WHERE id = :comp_id
+        """).bindparams(bindparam("reminders_sent", type_=JSON))
+
+        await session.execute(
+            stmt,
+            {
+                "reminders_sent": reminders_sent,
+                "comp_id": comp_id,
+            },
+        )
+        await session.commit()

@@ -16,7 +16,7 @@ logger = logging.getLogger("event_classifier")
 LLAMA_SERVER_URL = os.environ.get(
     "LLAMA_SERVER_URL", "http://localhost:8080/v1/chat/completions"
 )
-LLAMA_API_KEY = os.environ.get("LLAMA_API_KEY", "")
+LLAMA_API_KEY = os.environ.get("LLAMA_API_KEY", "").strip("\"' \r\n")
 
 EventClassificationLabel = Literal[
     "PUBLIC_EVENT",
@@ -259,8 +259,11 @@ class EventClassifier:
             # Menggunakan ClientTimeout(total=120.0) sesuai rekomendasi keamanan CPU
             timeout = aiohttp.ClientTimeout(total=120.0)
             headers = {"Content-Type": "application/json"}
-            if self.api_key:
-                headers["Authorization"] = f"Bearer {self.api_key}"
+            key = (self.api_key or os.environ.get("LLAMA_API_KEY", "")).strip(
+                "\"' \r\n"
+            )
+            if key and key != "sk-no-key":
+                headers["Authorization"] = f"Bearer {key}"
 
             async with aiohttp.ClientSession(timeout=timeout) as session:
                 async with session.post(

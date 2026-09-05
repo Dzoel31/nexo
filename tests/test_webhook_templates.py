@@ -178,3 +178,36 @@ def test_workflow_run_template_rendering():
 
     assert "content" in parsed
     assert "embeds" in parsed
+
+
+def test_schema_validation_with_empty_homepage():
+    user = {
+        "login": "octocat",
+        "id": 1,
+        "avatar_url": "https://github.com/images/error/octocat_happy.gif",
+        "html_url": "https://github.com/octocat",
+    }
+    repo_with_empty_homepage = {
+        "name": "nexo",
+        "full_name": "ksm-aiot-upnvj/nexo",
+        "private": False,
+        "html_url": "https://github.com/ksm-aiot-upnvj/nexo",
+        "owner": user,
+        "homepage": "",  # GitHub sends empty string when repo has no homepage set
+    }
+    push_payload = {
+        "ref": "refs/heads/main",
+        "before": "0000000000000000000000000000000000000000",
+        "after": "1111111111111111111111111111111111111111",
+        "repository": repo_with_empty_homepage,
+        "pusher": {"name": "octocat", "email": "octocat@github.com"},
+        "sender": user,
+        "created": False,
+        "deleted": False,
+        "forced": False,
+        "compare": "https://github.com/ksm-aiot-upnvj/nexo/compare/000...111",
+        "commits": [],
+    }
+
+    model = PushSchema(**push_payload)
+    assert model.repository.homepage is None

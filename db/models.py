@@ -132,3 +132,55 @@ class TokenUsageLog(Base):
         default=lambda: datetime.now(timezone.utc),
         nullable=False,
     )
+
+
+class ScheduledAnnouncement(Base):
+    __tablename__ = "scheduled_announcements"
+
+    id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid7)
+    guild_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
+    channel_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    author_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False)
+    is_embed: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    scheduled_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), index=True, nullable=False
+    )
+    status: Mapped[str] = mapped_column(
+        String(20), default="pending", index=True, nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+
+class Competition(Base):
+    __tablename__ = "competitions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    guild_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(255), nullable=False)
+    category: Mapped[str] = mapped_column(String(50), default="General", nullable=False)
+    deadline: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), index=True, nullable=False
+    )
+    registration_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    guidebook_url: Mapped[str | None] = mapped_column(String(512), nullable=True)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    channel_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    target_role_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    reminders_sent: Mapped[list[int]] = mapped_column(
+        JSON, default=list, nullable=False
+    )
+    is_active: Mapped[bool] = mapped_column(
+        Boolean, default=True, index=True, nullable=False
+    )
+    created_by: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )

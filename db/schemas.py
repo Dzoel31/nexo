@@ -127,6 +127,8 @@ class ScheduledEventRead(BaseModel):
 
 
 class TokenUsageLogCreate(BaseModel):
+    """Skema input pencatatan log konsumsi token LLM."""
+
     guild_id: int | None = None
     user_id: int
     username: str
@@ -137,6 +139,8 @@ class TokenUsageLogCreate(BaseModel):
 
 
 class TokenUsageLogRead(BaseModel):
+    """Skema representasi data log konsumsi token dari database."""
+
     model_config = ConfigDict(from_attributes=True)
 
     id: int
@@ -151,6 +155,8 @@ class TokenUsageLogRead(BaseModel):
 
 
 class UserTokenStats(BaseModel):
+    """Skema agregasi statistik pemakaian token seorang pengguna."""
+
     user_id: int
     username: str
     total_prompt_tokens: int
@@ -161,9 +167,76 @@ class UserTokenStats(BaseModel):
 
 
 class GuildTokenLeaderboardItem(BaseModel):
+    """Skema item pemakaian token pengguna pada leaderboard server."""
+
     user_id: int
     username: str
     prompt_tokens: int
     completion_tokens: int
     total_tokens: int
     interactions: int
+
+
+class ScheduledAnnouncementCreate(BaseModel):
+    """Skema input untuk membuat pengumuman terjadwal."""
+
+    guild_id: int
+    channel_id: int
+    author_id: int
+    content: str
+    scheduled_at: datetime
+    is_embed: bool = False
+    title: str | None = None
+
+
+class ScheduledAnnouncementRead(BaseModel):
+    """Skema representasi data pengumuman terjadwal dari database."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    guild_id: int
+    channel_id: int
+    author_id: int
+    content: str
+    is_embed: bool = False
+    title: str | None = None
+    scheduled_at: datetime
+    status: str = "pending"
+    created_at: datetime
+
+
+class CompetitionCreate(BaseModel):
+    """Skema input untuk mendaftarkan info kompetisi / hackathon baru."""
+
+    guild_id: int
+    name: str
+    category: str = "General"
+    deadline: datetime
+    channel_id: int
+    created_by: int
+    registration_url: str | None = None
+    guidebook_url: str | None = None
+    description: str | None = None
+    target_role_id: int | None = None
+
+
+class CompetitionRead(BaseModel):
+    """Skema representasi data kompetisi / hackathon dari database."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: int
+    guild_id: int
+    name: str
+    category: str
+    deadline: datetime
+    channel_id: int
+    created_by: int
+    registration_url: str | None = None
+    guidebook_url: str | None = None
+    description: str | None = None
+    target_role_id: int | None = None
+    reminders_sent: list[int] = Field(default_factory=list)
+    is_active: bool = True
+    created_at: datetime

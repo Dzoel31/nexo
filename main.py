@@ -79,6 +79,7 @@ async def main():
             "cogs.agent_orchestrator",
             "cogs.server_events",
             "cogs.webhook_deploy",
+            "cogs.competition_radar",
         ]
 
         for cog in cogs_to_load:
