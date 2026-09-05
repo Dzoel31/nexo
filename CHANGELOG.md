@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.13.0 (2026-09-05)
+
+### Features
+
+- Add competition radar cog, migrate repository to raw sql, and sanitize llama api key auth
+  ([`4187a59`](https://github.com/ksm-aiot-upnvj/nexo/commit/4187a596f9d4901e1a7ba8904ebf0827c60a21a8))
+
+
 ## v1.12.0 (2026-09-03)
 
 ### Features
