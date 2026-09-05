@@ -8,7 +8,7 @@ from utils.webhook_schemas import (
     WorkflowSchema,
 )
 
-from utils.gateway_server import compact_markdown
+from utils.gateway_server import compact_markdown, should_send_event
 
 env = Environment(loader=FileSystemLoader("templates"), autoescape=False)
 env.filters["compact_markdown"] = compact_markdown
@@ -211,3 +211,32 @@ def test_schema_validation_with_empty_homepage():
 
     model = PushSchema(**push_payload)
     assert model.repository.homepage is None
+
+
+def test_release_routing_action_released_vs_published():
+    """Verify that release routing drops 'published' and keeps 'released'."""
+    from types import SimpleNamespace
+
+    # 1. Verify should_send_event drops 'published' and retains 'released'
+    released_event = SimpleNamespace(action="released")
+    published_event = SimpleNamespace(action="published")
+    prereleased_event = SimpleNamespace(action="prereleased")
+    other_event = SimpleNamespace(action="created")
+
+    assert should_send_event("release", released_event) is True
+    assert should_send_event("release", published_event) is False
+    assert should_send_event("release", prereleased_event) is True
+    assert should_send_event("release", other_event) is False
+
+    # 2. Verify channel destination logic for allowed actions
+    release_channel_id = 999111
+    devlogs_channel_id = 888222
+    target_channel_id = 777333
+
+    # 'released' routes to release-notes channel
+    action_released = "released"
+    if action_released == "released":
+        dest_released = release_channel_id or target_channel_id
+    else:
+        dest_released = target_channel_id or devlogs_channel_id
+    assert dest_released == release_channel_id

@@ -112,8 +112,8 @@ def should_send_event(event_name: str, model: Any) -> bool:
         }
         return getattr(model, "action", None) in allowed_actions
     if event_name == "release":
+        # Ignore 'published' because it is already handled by 'released' to prevent duplicate broadcasts
         return getattr(model, "action", None) in {
-            "published",
             "released",
             "prereleased",
         }
@@ -290,8 +290,8 @@ async def webhook_handler(
                 ):
                     is_cd_success = True
         elif event == "release" and getattr(model, "action", None) in (
-            "published",
             "released",
+            "prereleased",
         ):
             # For releases, announce the release notes without triggering premature redeploy
             template_name = "release_message.j2"
@@ -324,12 +324,33 @@ async def webhook_handler(
                 release_channel_id = int(
                     os.environ.get("WEBHOOK_RELEASE_NOTES_CHANNEL_ID", 0) or 0
                 )
-                dest_channel_id = release_channel_id or target_channel_id
-                launch_background_task(
-                    cog.send_discord_notification(
-                        message_payload, target_channel_id=dest_channel_id
+                action = getattr(model, "action", None)
+                if action == "released":
+                    dest_channel_id = release_channel_id or target_channel_id
+                    launch_background_task(
+                        cog.send_discord_notification(
+                            message_payload, target_channel_id=dest_channel_id
+                        )
                     )
-                )
+                elif action == "prereleased":
+                    devlogs_channel_id = int(
+                        os.environ.get("WEBHOOK_DEVLOGS_CHANNEL_ID", 0) or 0
+                    )
+                    dest_channel_id = target_channel_id or devlogs_channel_id
+                    if dest_channel_id and dest_channel_id != release_channel_id:
+                        launch_background_task(
+                            cog.send_discord_notification(
+                                message_payload, target_channel_id=dest_channel_id
+                            )
+                        )
+                    else:
+                        logger.info(
+                            f"Skipping prerelease event ('{action}') on release-notes channel"
+                        )
+                else:
+                    logger.info(
+                        f"Ignoring unsupported release event action ('{action}')"
+                    )
             elif is_cd_success:
                 # Defer sending rich CD announcement until AFTER VPS deployment succeeds
                 launch_background_task(
