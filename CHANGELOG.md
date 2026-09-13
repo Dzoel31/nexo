@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.13.2 (2026-09-13)
+
+### Bug Fixes
+
+- Missing member intent and add try-except handler on on_member_join function
+  ([`70cf106`](https://github.com/ksm-aiot-upnvj/nexo/commit/70cf106f531406fbafed7aaf360ab055ad334981))
+
+
 ## v1.13.1 (2026-09-05)
 
 ### Bug Fixes
