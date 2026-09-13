@@ -893,19 +893,28 @@ class ServerEvents(commands.Cog):
     async def on_member_join(self, member):
         """Send a welcome message when a new member joins"""
         channel_id = int(os.environ.get("WELCOME_AND_RULES_CHANNEL_ID", 0))
-        channel = self.bot.get_channel(channel_id)
 
-        if channel:
-            welcome_msg = (
-                f"Welcome {member.mention} to the AIoT server! 👋\n"
-                f"To get more access, please introduce yourself using the following format:\n\n"
-                f"Name:\n"
-                f"Nickname:\n"
-                f"Batch/Year:\n"
-                f"Hobby:\n"
-                f"Interest:\n"
+        try: 
+            channel = self.bot.get_channel(channel_id)
+            if channel:
+                welcome_msg = (
+                    f"Welcome {member.mention} to the AIoT server! 👋\n"
+                    f"To get more access, please introduce yourself using the following format:\n\n"
+                    f"Name:\n"
+                    f"Nickname:\n"
+                    f"Batch/Year:\n"
+                    f"Hobby:\n"
+                    f"Interest:\n"
+                )
+                await channel.send(welcome_msg)
+        except discord.Forbidden:
+            logger.error(
+                "Failed to send welcome message: Bot does not have Send Messages or View Channel permission."
             )
-            await channel.send(welcome_msg)
+        except discord.HTTPException as e:
+            logger.error(f"Failed to send welcome message (HTTP Exception): {e}")
+        except Exception as e:
+            logger.error(f"Unexpected error during welcome message: {e}")
 
     @commands.Cog.listener()
     async def on_message(self, message):

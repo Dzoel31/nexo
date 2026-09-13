@@ -18,6 +18,7 @@ TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "")
 
 intents = discord.Intents.default()
 intents.message_content = True  # Required to read message content
+intents.members = True
 default_mentions = discord.AllowedMentions(
     everyone=False,
     roles=False,
