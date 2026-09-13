@@ -894,7 +894,7 @@ class ServerEvents(commands.Cog):
         """Send a welcome message when a new member joins"""
         channel_id = int(os.environ.get("WELCOME_AND_RULES_CHANNEL_ID", 0))
 
-        try: 
+        try:
             channel = self.bot.get_channel(channel_id)
             if channel:
                 welcome_msg = (
