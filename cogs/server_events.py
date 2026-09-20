@@ -51,7 +51,9 @@ class ServerEvents(commands.Cog):
         self._bot_created_event_ids: set[int] = set()
 
         # Configuration for temporary voice channels
-        self.GENERATOR_CHANNEL_ID = int(os.getenv("GENERATOR_CHANNEL_ID", 1424293013930819694))
+        self.GENERATOR_CHANNEL_ID = int(
+            os.getenv("GENERATOR_CHANNEL_ID", 1424293013930819694)
+        )
         self.CATEGORY_ID = int(os.getenv("CATEGORY_ID", 1424293213930819694))
         self.active_temp_channels = set()
         self.has_vc_scanned = False
@@ -214,7 +216,7 @@ class ServerEvents(commands.Cog):
         self.bot.local_tool_handlers["check_voice_channel"] = (
             self.check_voice_channel_handler
         )
-    
+
     @commands.Cog.listener()
     async def on_ready(self):
         if self.has_vc_scanned:
@@ -233,7 +235,9 @@ class ServerEvents(commands.Cog):
         recovered_count = 0
 
         for channel in category.voice_channels:
-            if channel.id == self.GENERATOR_CHANNEL_ID or not channel.name.startswith("🔒 "):
+            if channel.id == self.GENERATOR_CHANNEL_ID or not channel.name.startswith(
+                "🔒 "
+            ):
                 continue
 
             if len(channel.members) == 0:
@@ -242,11 +246,11 @@ class ServerEvents(commands.Cog):
                     cleaned_count += 1
                 except discord.HTTPException:
                     pass
-            
+
             else:
                 self.active_temp_channels.add(channel.id)
                 recovered_count += 1
-        
+
         logger.info(f"Cleaned {cleaned_count} empty temp channels")
         logger.info(f"Recovered {recovered_count} active temp channels")
         self.has_vc_scanned = True
@@ -1789,25 +1793,30 @@ class ServerEvents(commands.Cog):
             logger.error(f"Error handling scheduled event delete: {e}")
 
     @commands.Cog.listener()
-    async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
+    async def on_voice_state_update(
+        self,
+        member: discord.Member,
+        before: discord.VoiceState,
+        after: discord.VoiceState,
+    ):
         if after.channel and after.channel.id == self.GENERATOR_CHANNEL_ID:
             guild = member.guild
             category = after.channel.category
 
             overwrites = {
-                guild.default_role: discord.PermissionOverwrite(connect=True, view_channel=True),
+                guild.default_role: discord.PermissionOverwrite(
+                    connect=True, view_channel=True
+                ),
                 member: discord.PermissionOverwrite(
-                    manage_channels=True,
-                    move_members=True,
-                    manage_permissions=True
-                )
+                    manage_channels=True, move_members=True, manage_permissions=True
+                ),
             }
 
             try:
                 temp_channel = await guild.create_voice_channel(
                     name=f"🔒 {member.display_name}'s Room",
                     category=category,
-                    overwrites=overwrites
+                    overwrites=overwrites,
                 )
 
                 self.active_temp_channels.add(temp_channel.id)
