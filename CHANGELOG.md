@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.14.0 (2026-09-20)
+
+### Features
+
+- Add server events cog and event classifier utility with dependency and configuration updates
+  ([`8d0331f`](https://github.com/ksm-aiot-upnvj/nexo/commit/8d0331f98b6efe136c5a51ad3cd383768ce2a5ff))
+
+
 ## v1.13.2 (2026-09-13)
 
 ### Bug Fixes
