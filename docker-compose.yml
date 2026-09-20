@@ -21,6 +21,8 @@ services:
       - GOOGLE_SERVICE_ACCOUNT_FILE
       - GOOGLE_CALENDAR_ID
       - LLAMA_API_KEY
+      - GENERATOR_CHANNEL_ID
+      - CATEGORY_ID
     volumes:
       - ./prompts:/app/prompts
       - ./data:/app/data

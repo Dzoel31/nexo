@@ -176,7 +176,7 @@ class EventClassifier:
         # Tahap 3: SLM Router Fallback (Prioritas 2 - Gemma 4 Inference)
         # -------------------------------------------------------------
         logger.info(
-            f"[Classifier:SLMFallback] Memanggil llama-server untuk klasifikasi ambigu: '{summary}'"
+            f"[Classifier:SLMFallback] Memanggil llama-server untuk klasifikasi: '{summary}'"
         )
         return await self._classify_via_slm(summary, description)
 
@@ -311,7 +311,7 @@ class EventClassifier:
                     )
         except asyncio.TimeoutError:
             logger.warning(
-                f"[Classifier:Timeout] Inferensi LLM melebihi 120s untuk '{summary}'. Menggunakan fallback aman."
+                f"[Classifier:Timeout] Inferensi LLM melebihi 120s untuk '{summary}'. Menggunakan fallback."
             )
             return self._safe_fallback(summary)
         except Exception as e:
@@ -339,7 +339,7 @@ class EventClassifier:
     def _safe_fallback(self, summary: str) -> EventClassificationResult:
         """Deterministic safe fallback when SLM inference fails or times out."""
         logger.info(
-            f"[Classifier:SafeFallback] Menerapkan default aman untuk '{summary}'"
+            f"[Classifier:SafeFallback] Menerapkan nilai default untuk klasifikasi '{summary}'"
         )
         return EventClassificationResult(
             label="INTERNAL_MEETING",

@@ -49,6 +49,14 @@ class ServerEvents(commands.Cog):
         self.bot = bot
         self._reminded_cache: set[tuple[int, int]] = set()
         self._bot_created_event_ids: set[int] = set()
+
+        # Configuration for temporary voice channels
+        self.GENERATOR_CHANNEL_ID = int(os.getenv("GENERATOR_CHANNEL_ID", 1424293013930819694))
+        self.CATEGORY_ID = int(os.getenv("CATEGORY_ID", 1424293213930819694))
+        self.active_temp_channels = set()
+        self.has_vc_scanned = False
+
+        # Reminder loop based on Calendar and Discord Events
         self.reminder_loop.start()
         self.sync_events_from_gcal.start()
 
@@ -206,6 +214,42 @@ class ServerEvents(commands.Cog):
         self.bot.local_tool_handlers["check_voice_channel"] = (
             self.check_voice_channel_handler
         )
+    
+    @commands.Cog.listener()
+    async def on_ready(self):
+        if self.has_vc_scanned:
+            return
+
+        await self.bot.wait_until_ready()
+
+        category = self.bot.get_channel(self.CATEGORY_ID)
+        if not category or not isinstance(category, discord.CategoryChannel):
+            logger.warning("CategoryChannel for Voice channel not found")
+            self.has_vc_scanned = True
+            return
+
+        logger.info(f"Scanned and cached Category ID: {category.id}")
+        cleaned_count = 0
+        recovered_count = 0
+
+        for channel in category.voice_channels:
+            if channel.id == self.GENERATOR_CHANNEL_ID or not channel.name.startswith("🔒 "):
+                continue
+
+            if len(channel.members) == 0:
+                try:
+                    await channel.delete(reason="Cleanup temp channel after restart")
+                    cleaned_count += 1
+                except discord.HTTPException:
+                    pass
+            
+            else:
+                self.active_temp_channels.add(channel.id)
+                recovered_count += 1
+        
+        logger.info(f"Cleaned {cleaned_count} empty temp channels")
+        logger.info(f"Recovered {recovered_count} active temp channels")
+        self.has_vc_scanned = True
 
     async def create_event_handler(self, arguments: dict, ctx_obj=None) -> str:
         """Function called by the LLM brain when create_discord_event tool is used"""
@@ -1743,6 +1787,46 @@ class ServerEvents(commands.Cog):
                     await session.commit()
         except Exception as e:
             logger.error(f"Error handling scheduled event delete: {e}")
+
+    @commands.Cog.listener()
+    async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState):
+        if after.channel and after.channel.id == self.GENERATOR_CHANNEL_ID:
+            guild = member.guild
+            category = after.channel.category
+
+            overwrites = {
+                guild.default_role: discord.PermissionOverwrite(connect=True, view_channel=True),
+                member: discord.PermissionOverwrite(
+                    manage_channels=True,
+                    move_members=True,
+                    manage_permissions=True
+                )
+            }
+
+            try:
+                temp_channel = await guild.create_voice_channel(
+                    name=f"🔒 {member.display_name}'s Room",
+                    category=category,
+                    overwrites=overwrites
+                )
+
+                self.active_temp_channels.add(temp_channel.id)
+
+                await member.move_to(temp_channel)
+
+            except discord.HTTPException as e:
+                logger.error(f"Failed to create temp channel: {e}")
+                return
+
+        if before.channel and before.channel.id in self.active_temp_channels:
+            if len(before.channel.members) == 0:
+                try:
+                    self.active_temp_channels.remove(before.channel.id)
+                    await before.channel.delete(reason="Temp channel empty.")
+                except discord.NotFound:
+                    pass
+                except discord.HTTPException as e:
+                    logger.error(f"Failed to delete temp channel: {e}")
 
 
 async def setup(bot):
