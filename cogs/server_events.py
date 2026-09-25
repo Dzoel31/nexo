@@ -1803,14 +1803,13 @@ class ServerEvents(commands.Cog):
             guild = member.guild
             category = after.channel.category
 
-            overwrites = {
-                guild.default_role: discord.PermissionOverwrite(
-                    connect=True, view_channel=True
-                ),
-                member: discord.PermissionOverwrite(
-                    manage_channels=True, move_members=True, manage_permissions=True
-                ),
-            }
+            overwrites = category.overwrites.copy() if category else {}
+
+            overwrites[member] = discord.PermissionOverwrite(
+                manage_channels=True,
+                move_members=True,
+                manage_permissions=True,
+            )
 
             try:
                 temp_channel = await guild.create_voice_channel(
