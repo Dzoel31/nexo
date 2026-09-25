@@ -120,9 +120,9 @@ class HelpView(discord.ui.View):
             embed.add_field(
                 name="Management & Moderation",
                 value=(
-                    "`$say <pesan>` : Kirim pesan atas nama bot di channel aktif (Admin/Staff)\n"
-                    "`$say to <#channel> <pesan>` : Kirim pesan atas nama bot ke channel tujuan (Admin/Staff)\n"
-                    "`$clear [limit]` : Hapus pesan percakapan secara massal (Admin)\n"
+                    "`$say <pesan>` : Kirim pesan atas nama bot di channel aktif\n"
+                    "`$say to <#channel> <pesan>` : Kirim pesan atas nama bot ke channel tujuan\n"
+                    "`$clear [limit]` : Hapus pesan percakapan secara massal\n"
                     "`/reset_memory` : Bersihkan riwayat memori sesi obrolan aktif"
                 ),
                 inline=False,
@@ -139,12 +139,12 @@ class HelpView(discord.ui.View):
                 value=(
                     "`/reset_memory` : Bersihkan riwayat percakapan konteks AI Anda\n"
                     "`$tools` : Tampilkan seluruh tools lokal & MCP aktif\n"
-                    "`$sync` : Sinkronisasi manual Application Slash Commands (Owner)"
+                    "`$sync` : Sinkronisasi manual Application Slash Commands"
                 ),
                 inline=False,
             )
             embed.add_field(
-                name="Autonomous Capabilities (Gemma 4)",
+                name="Autonomous Capabilities",
                 value=(
                     "Cukup mention/ajak ngobrol Nexo secara natural untuk:\n"
                     "• **Google Calendar & Discord Events:** Buat, sync 2 arah, klasifikasi & reminder agenda\n"
@@ -155,14 +155,14 @@ class HelpView(discord.ui.View):
             )
             embed.add_field(
                 name="Fitur Otomatis",
-                value="- Menyambut anggota baru di channel *welcome*\n- Menugaskan role otomatis saat perkenalan",
+                value="- Menyambut anggota baru di channel *welcome*\n- Memberikan role otomatis saat perkenalan",
                 inline=False,
             )
 
         elif self.current_page == 2:
-            embed.title = "🧰 IoT & MCP Tools (Live Active)"
+            embed.title = "🧰 IoT & MCP Tools"
             embed.description = (
-                "Seluruh perkakas (tools) IoT & fungsi eksternal yang dapat diakses AI.\n"
+                "Seluruh Tools IoT & fungsi eksternal yang dapat diakses AI.\n"
                 "─────────────────────────────"
             )
             await self.fetch_mcp_tools_live()
@@ -242,7 +242,7 @@ class HelpView(discord.ui.View):
                 value=(
                     "• Mendukung webhook deployment otomatis ke VPS / Portainer\n"
                     "• Notifikasi rilis resmi disiarkan ke channel `#release-notes`\n"
-                    "• `/deploy [project]` : Trigger manual webhook deployment (Admin)"
+                    "• `/deploy [project]` : Trigger manual webhook deployment"
                 ),
                 inline=False,
             )

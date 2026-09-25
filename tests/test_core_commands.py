@@ -25,9 +25,15 @@ def create_ctx(manage_messages=True, is_owner=False):
     return ctx
 
 
+def create_mock_bot():
+    bot = AsyncMock()
+    bot.wait_until_ready = AsyncMock()
+    return bot
+
+
 @pytest.mark.asyncio
 async def test_say_command_unauthorized():
-    bot = MagicMock()
+    bot = create_mock_bot()
     cog = CoreCommands(bot)
     ctx = create_ctx(manage_messages=False)
 
@@ -39,7 +45,7 @@ async def test_say_command_unauthorized():
 
 @pytest.mark.asyncio
 async def test_say_command_success():
-    bot = MagicMock()
+    bot = create_mock_bot()
     cog = CoreCommands(bot)
     ctx = create_ctx(manage_messages=True)
 
@@ -57,7 +63,7 @@ async def test_say_command_success():
 
 @pytest.mark.asyncio
 async def test_say_command_smart_mentions():
-    bot = MagicMock()
+    bot = create_mock_bot()
     cog = CoreCommands(bot)
     ctx = create_ctx(manage_messages=True)
 
@@ -101,7 +107,7 @@ async def test_say_command_smart_mentions():
 
 @pytest.mark.asyncio
 async def test_say_command_embed_mode():
-    bot = MagicMock()
+    bot = create_mock_bot()
     cog = CoreCommands(bot)
     ctx = create_ctx(manage_messages=True)
     ctx.guild.name = "KSM AIoT Server"
@@ -158,7 +164,7 @@ async def test_say_command_schedule_in(monkeypatch):
     import uuid
     from unittest.mock import AsyncMock, patch
 
-    bot = MagicMock()
+    bot = create_mock_bot()
     cog = CoreCommands(bot)
     ctx = create_ctx(manage_messages=True)
 
@@ -192,7 +198,7 @@ async def test_say_command_list_and_cancel(monkeypatch):
     from datetime import datetime, timezone
     from unittest.mock import AsyncMock, patch
 
-    bot = MagicMock()
+    bot = create_mock_bot()
     cog = CoreCommands(bot)
     ctx = create_ctx(manage_messages=True)
 
