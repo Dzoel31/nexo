@@ -2,6 +2,17 @@
 
 <!-- version list -->
 
+## v1.14.1 (2026-09-25)
+
+### Bug Fixes
+
+- Description on help command and mock pytest
+  ([`ea152b0`](https://github.com/ksm-aiot-upnvj/nexo/commit/ea152b01a562efe85d233232563a66a7991d5a4b))
+
+- Update server event permissions
+  ([`54c5a3d`](https://github.com/ksm-aiot-upnvj/nexo/commit/54c5a3d0604487b4a8d33506721c0ac241f71ad5))
+
+
 ## v1.14.0 (2026-09-20)
 
 ### Features
