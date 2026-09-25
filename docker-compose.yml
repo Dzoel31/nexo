@@ -28,7 +28,9 @@ services:
       - ./data:/app/data
       - /home/admin-iot-hydroponik/ksm-aiot/nexo/credentials:/app/credentials:ro
       - /home/admin-iot-hydroponik/ksm-aiot:/home/admin-iot-hydroponik/ksm-aiot:ro
-
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     deploy:
       resources:
         limits:
