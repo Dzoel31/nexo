@@ -63,7 +63,12 @@ _TOKEN_CACHE: OrderedDict[str, int] = OrderedDict()
 _MAX_CACHE_SIZE = 1000
 _INFLIGHT_TOKEN_REQUESTS: dict[str, asyncio.Future[int]] = {}
 
-ai_client = AsyncOpenAI(base_url=LLM_BASE_URL, api_key=LLM_API_KEY)
+# A real key is only required when calling a remote LLM service.
+# The fallback allows imports and offline/unit tests to run in CI.
+ai_client = AsyncOpenAI(
+    base_url=LLM_BASE_URL,
+    api_key=LLM_API_KEY or "sk-no-key",
+)
 
 
 async def count_token(text_content: str) -> int:
