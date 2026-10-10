@@ -1,20 +1,14 @@
-import os
 from collections.abc import AsyncGenerator
-from dotenv import load_dotenv
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
-
-load_dotenv()
+from config.settings import settings
 
 # Format URL: postgresql+asyncpg://user:password@host:port/dbname
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgresql+asyncpg://nexo_dev:nexo_1234@localhost:5432/nexo_db",
-)
+DATABASE_URL = settings.DATABASE_URL
 
 engine: AsyncEngine = create_async_engine(
     DATABASE_URL,
