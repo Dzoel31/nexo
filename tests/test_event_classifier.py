@@ -1,5 +1,4 @@
 from unittest.mock import AsyncMock, MagicMock, patch
-import aiohttp
 import pytest
 
 from utils.event_classifier import EventClassifier
@@ -60,28 +59,17 @@ async def test_slm_fallback_success():
     classifier = EventClassifier()
     ambiguous_title = "Diskusi Roadmap Q3 di Discord"
 
-    mock_response_data = {
-        "choices": [
-            {
-                "message": {
-                    "content": '{"label": "INTERNAL_MEETING", "is_discord_event": true}'
-                }
-            }
-        ]
-    }
+    mock_response = MagicMock()
+    mock_response.choices[
+        0
+    ].message.content = '{"label": "INTERNAL_MEETING", "is_discord_event": true}'
 
-    mock_resp = MagicMock()
-    mock_resp.status = 200
-    mock_resp.json = AsyncMock(return_value=mock_response_data)
-
-    mock_session = MagicMock()
-    mock_session.post.return_value.__aenter__.return_value = mock_resp
-    mock_session.post.return_value.__aexit__.return_value = None
-
-    with patch("aiohttp.ClientSession") as MockClientSession:
-        MockClientSession.return_value.__aenter__.return_value = mock_session
-        MockClientSession.return_value.__aexit__.return_value = None
-
+    with patch.object(
+        classifier.ai_client.chat.completions,
+        "create",
+        new_callable=AsyncMock,
+        return_value=mock_response,
+    ):
         res = await classifier.classify_event(ambiguous_title)
         assert res.label == "INTERNAL_MEETING"
         assert res.is_discord_event is True
@@ -93,12 +81,12 @@ async def test_slm_fallback_timeout_safe_fallback():
     classifier = EventClassifier()
     ambiguous_title = "Agenda Tanpa Nama Jelas"
 
-    with patch("aiohttp.ClientSession") as MockClientSession:
-        mock_session = MagicMock()
-        mock_session.post.side_effect = aiohttp.ServerTimeoutError()
-        MockClientSession.return_value.__aenter__.return_value = mock_session
-        MockClientSession.return_value.__aexit__.return_value = None
-
+    with patch.object(
+        classifier.ai_client.chat.completions,
+        "create",
+        new_callable=AsyncMock,
+        side_effect=TimeoutError(),
+    ):
         res = await classifier.classify_event(ambiguous_title)
         assert res.label == "INTERNAL_MEETING"
         assert res.is_discord_event is False
