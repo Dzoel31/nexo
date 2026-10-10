@@ -1,5 +1,4 @@
 import asyncio
-import os
 import json
 import logging
 from datetime import datetime
@@ -8,6 +7,7 @@ import discord
 from mcp import ClientSession
 from mcp.client.sse import sse_client
 from openai import AsyncOpenAI
+from config.settings import settings
 from db.repository import (
     get_or_create_conversation,
     get_conversation_context,
@@ -23,12 +23,10 @@ logger = logging.getLogger("mcp_client")
 # ---------------------------------------------------------
 # CONFIGURATION & CONSTANTS
 # ---------------------------------------------------------
-LLAMA_SERVER_URL = os.environ.get(
-    "LLAMA_SERVER_URL", "http://localhost:8080/v1/chat/completions"
-)
-LLAMA_BASE_URL = LLAMA_SERVER_URL.replace("/chat/completions", "")
-LLAMA_API_KEY = os.environ.get("LLAMA_API_KEY", "").strip("\"' \r\n")
-MCP_SERVER_URL = os.environ.get("MCP_SERVER_URL", "http://127.0.0.1:8000")
+LLM_BASE_URL = settings.LLM_BASE_URL
+LLM_API_KEY = settings.LLM_API_KEY.strip("\"' \r\n")
+LLM_MODEL_NAME = settings.LLM_MODEL_NAME
+MCP_SERVER_URL = settings.MCP_SERVER_URL
 
 # Load System Prompt
 try:
@@ -36,7 +34,7 @@ try:
         SYSTEM_PROMPT = f.read().strip()
 except FileNotFoundError:
     SYSTEM_PROMPT = "You are Nexo, a helpful assistant."
-ai_client = AsyncOpenAI(base_url=LLAMA_BASE_URL, api_key=LLAMA_API_KEY or "sk-no-key")
+ai_client = AsyncOpenAI(base_url=LLM_BASE_URL, api_key=LLM_API_KEY or "sk-no-key")
 
 
 def sanitize_parameters(schema: dict) -> dict:
@@ -233,25 +231,23 @@ async def check_services_health():
         async with aiohttp.ClientSession() as session:
             # Check llama-server
             try:
-                llama_headers = {}
-                key = os.environ.get("LLAMA_API_KEY", LLAMA_API_KEY).strip("\"' \r\n")
-                if key and key != "sk-no-key":
-                    llama_headers["Authorization"] = f"Bearer {key}"
-
                 async with session.get(
-                    f"{LLAMA_BASE_URL.replace('/v1', '')}/health",
-                    headers=llama_headers,
+                    f"{LLM_BASE_URL.replace('/v1', '')}/health/liveness",
                     timeout=aiohttp.ClientTimeout(total=2),
                 ) as response:
                     if response.status != 200:
+                        logger.error(
+                            f"llama-server health check failed with response: {response.status}"
+                        )
                         return (
                             False,
-                            "⚠️ **llama-server** responded with an error (non-200).",
+                            f"**llama-server** responded with an error ({response.status}).",
                         )
-            except Exception:
+            except Exception as e:
+                logger.warning("llama-server health check failed: %s", e)
                 return (
                     False,
-                    "❌ **llama-server** is OFFLINE. Please start the LLM server.",
+                    f"**llama-server** is OFFLINE. Please start the LLM server. Error: {e}",
                 )
 
             # Check MCP server
@@ -265,8 +261,8 @@ async def check_services_health():
                     ) as response:
                         if response.status in (200, 400, 405):
                             mcp_ok = True
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("MCP SSE health check failed: %s", e)
 
                 # 2. Try root endpoint if /sse was not reached
                 if not mcp_ok:
@@ -277,17 +273,20 @@ async def check_services_health():
                             mcp_ok = True
 
                 if not mcp_ok:
+                    logger.warning("MCP health check returned no healthy endpoint")
                     return (
                         False,
-                        "⚠️ **MCP Server** responded with an error.",
+                        f"**MCP Server** responded with an error ({response.status}).",
                     )
-            except Exception:
+            except Exception as e:
+                logger.warning("MCP server health check failed: %s", e)
                 return (
                     False,
-                    "❌ **MCP Server** is OFFLINE. Please start the MCP server.",
+                    "**MCP Server** is OFFLINE. Please start the MCP server.",
                 )
 
     except Exception as e:
+        logger.exception("Unexpected error while checking service health")
         return False, f"An error occurred while checking servers: {str(e)}"
 
     return True, "All systems go"
@@ -381,7 +380,7 @@ async def process_with_mcp_tools(
             all_tools.extend(bot.cached_mcp_tools)
 
         kwargs = {
-            "model": "local-model",
+            "model": LLM_MODEL_NAME,
             "messages": messages,
             "temperature": 0.7,
             "top_p": 0.95,
@@ -481,7 +480,10 @@ async def process_with_mcp_tools(
                             log_msg = str(result)[:100] + (
                                 "..." if len(str(result)) > 100 else ""
                             )
-                    except json.JSONDecodeError, TypeError:
+                    except (json.JSONDecodeError, TypeError) as e:
+                        logger.debug(
+                            "Tool '%s' returned non-JSON result: %s", tool_name, e
+                        )
                         log_msg = str(result)[:100] + (
                             "..." if len(str(result)) > 100 else ""
                         )

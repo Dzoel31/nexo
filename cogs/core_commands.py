@@ -1,10 +1,10 @@
 import asyncio
-import os
 import re
 import uuid
 from datetime import datetime, timedelta, timezone
 import discord
 import logging
+import aiohttp
 from discord import app_commands
 from discord.ext import commands, tasks
 from db.repository import (
@@ -16,8 +16,9 @@ from db.repository import (
     reset_conversation_history,
 )
 from utils.auth_helper import has_permission
+from config.settings import settings
 from utils.mcp_client import (
-    LLAMA_BASE_URL,
+    LLM_BASE_URL,
     MCP_SERVER_URL,
     get_tools_from_mcp_server,
 )
@@ -604,28 +605,26 @@ class CoreCommands(commands.Cog):
         """Check the status of services."""
         status_messages = ["🔍 Checking service status..."]
 
-        import aiohttp
-
-        # Check llama-server
-        logger.info(f"Server llama.cpp: {LLAMA_BASE_URL.replace('/v1', '')}")
+        # Check LLM provider
+        logger.info(f"LLM provider: {LLM_BASE_URL.replace('/v1', '')}")
         try:
-            api_key = os.environ.get("LLAMA_API_KEY", "").strip("\"' \r\n")
+            api_key = settings.LLM_API_KEY.strip("\"' \r\n")
             llama_headers = {}
             if api_key and api_key != "sk-no-key":
                 llama_headers["Authorization"] = f"Bearer {api_key}"
 
             async with aiohttp.ClientSession() as session:
                 async with session.get(
-                    f"{LLAMA_BASE_URL.replace('/v1', '')}/health",
+                    f"{LLM_BASE_URL.replace('/v1', '')}/health",
                     headers=llama_headers,
                     timeout=aiohttp.ClientTimeout(total=5),
                 ) as response:
                     if response.status == 200:
-                        status_messages.append("✅ llama-server: ONLINE")
+                        status_messages.append("✅ LLM Provider: ONLINE")
                     else:
-                        status_messages.append("⚠️ llama-server: RESPONDING (non-200)")
-        except Exception:
-            status_messages.append("❌ llama-server: OFFLINE")
+                        status_messages.append("❌ LLM Provider: UNAVAILABLE")
+        except aiohttp.ClientError, asyncio.TimeoutError:
+            status_messages.append("❌ LLM Provider: UNAVAILABLE")
 
         # Check MCP server
         try:
@@ -636,9 +635,9 @@ class CoreCommands(commands.Cog):
                     if response.status == 200:
                         status_messages.append("✅ MCP Server: ONLINE")
                     else:
-                        status_messages.append("⚠️ MCP Server: RESPONDING (non-200)")
-        except Exception:
-            status_messages.append("❌ MCP Server: OFFLINE")
+                        status_messages.append("❌ MCP Server: UNAVAILABLE")
+        except aiohttp.ClientError, asyncio.TimeoutError:
+            status_messages.append("❌ MCP Server: UNAVAILABLE")
 
         await ctx.send("\n".join(status_messages))
 

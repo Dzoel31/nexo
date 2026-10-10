@@ -4,12 +4,11 @@ from datetime import datetime, timedelta, timezone
 import hashlib
 import inspect
 import logging
-import os
 import uuid
 from uuid import UUID
 
-import aiohttp
 from sqlalchemy import JSON, bindparam, text
+from openai import AsyncOpenAI
 
 from db.models import MessageRole
 from db.schemas import (
@@ -23,28 +22,24 @@ from db.schemas import (
     ScheduledAnnouncementRead,
 )
 from db.session import async_session
+from config.settings import settings
 
 logger = logging.getLogger("chat_repository")
 
 # ---------------------------------------------------------
 # CONSTANTS & TOKEN BUDGETS (Gemma 4 E2B - 8,192 Tokens Context)
 # ---------------------------------------------------------
-LLAMA_SERVER_URL = os.environ.get(
-    "LLAMA_SERVER_URL", "http://localhost:8080/v1/chat/completions"
-)
-LLAMA_TOKENIZE_URL = os.environ.get(
-    "LLAMA_TOKENIZE_URL",
-    LLAMA_SERVER_URL.replace("/v1/chat/completions", "/tokenize"),
-)
-LLAMA_API_KEY = os.environ.get("LLAMA_API_KEY", "").strip("\"' \r\n")
+LLM_BASE_URL = settings.LLM_BASE_URL
+LLM_API_KEY = settings.LLM_API_KEY.strip("\"' \r\n")
 
 # ---------------------------------------------------------
 # DYNAMIC TOKEN BUDGETING (Gemma 4 E2B - 8,192 Tokens Context)
 # ---------------------------------------------------------
-TOTAL_CONTEXT_WINDOW = int(os.environ.get("TOTAL_CONTEXT_WINDOW", "8192"))
+TOTAL_CONTEXT_WINDOW = settings.TOTAL_CONTEXT_WINDOW
 MAX_COMPLETION_TOKENS = 1024  # Sesuai max_tokens di ai_client
 BASE_OVERHEAD_TOKENS = 1400  # System prompt + Pydantic tools + metadata WIB
 TOOL_BUFFER_TOKENS = 1200  # Buffer aman untuk output eksekusi multi-tool paralel
+LLM_MODEL_NAME = settings.LLM_MODEL_NAME
 
 # Sisa kuota aman yang dialokasikan khusus untuk riwayat obrolan (History Budget):
 USABLE_HISTORY_BUDGET = max(
@@ -66,34 +61,14 @@ CONVERSATION_TTL = timedelta(hours=24)
 # ---------------------------------------------------------
 _TOKEN_CACHE: OrderedDict[str, int] = OrderedDict()
 _MAX_CACHE_SIZE = 1000
-_SHARED_SESSION: aiohttp.ClientSession | None = None
 _INFLIGHT_TOKEN_REQUESTS: dict[str, asyncio.Future[int]] = {}
 
-
-async def get_http_session() -> aiohttp.ClientSession:
-    """Get or create persistent aiohttp client session for tokenizing."""
-    global _SHARED_SESSION
-    if _SHARED_SESSION is None or _SHARED_SESSION.closed:
-        _SHARED_SESSION = aiohttp.ClientSession(
-            timeout=aiohttp.ClientTimeout(total=2.0)
-        )
-    return _SHARED_SESSION
+ai_client = AsyncOpenAI(base_url=LLM_BASE_URL, api_key=LLM_API_KEY)
 
 
-async def close_http_session() -> None:
-    """Closes persistent aiohttp session cleanly on bot shutdown."""
-    global _SHARED_SESSION
-    if _SHARED_SESSION is not None and not _SHARED_SESSION.closed:
-        await _SHARED_SESSION.close()
-        _SHARED_SESSION = None
-        logger.info("Closed persistent aiohttp token session.")
-
-
-async def count_token(
-    text_content: str, session_http: aiohttp.ClientSession | None = None
-) -> int:
+async def count_token(text_content: str) -> int:
     """
-    True LRU token caching for llama.cpp /tokenize endpoint:
+    True LRU token caching for the Responses input token endpoint:
     1. Returns 0 for empty text.
     2. Generates MD5 hash of input text.
     3. Checks _TOKEN_CACHE and calls move_to_end() on cache hit.
@@ -124,24 +99,11 @@ async def count_token(
 
     token_count = 0
     try:
-        sess = session_http if session_http is not None else await get_http_session()
-        headers = {}
-        api_key = os.environ.get("LLAMA_API_KEY", LLAMA_API_KEY).strip("\"' \r\n")
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
-        async with sess.post(
-            LLAMA_TOKENIZE_URL, json={"content": text_content}, headers=headers
-        ) as response:
-            if response.status == 200:
-                data = await response.json()
-                tokens = data.get("tokens", [])
-                token_count = len(tokens)
-            else:
-                if response.status == 401:
-                    logger.warning(
-                        "[Tokenize] llama-server returned 401 Unauthorized: Invalid API Key. Periksa LLAMA_API_KEY."
-                    )
-                token_count = max(1, len(text_content) // 4)
+        response = await ai_client.responses.input_tokens.count(
+            model=LLM_MODEL_NAME,
+            input=text_content,
+        )
+        token_count = int(response.input_tokens)
     except Exception:
         # Fallback estimation if tokenize endpoint offline or fails
         token_count = max(1, len(text_content) // 4)

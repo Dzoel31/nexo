@@ -2,7 +2,6 @@ import asyncio
 from datetime import datetime, timezone
 import json
 import logging
-import os
 import time
 
 import discord
@@ -23,6 +22,7 @@ from utils.mcp_client import (
     process_with_mcp_tools,
     sanitize_tools_list,
 )
+from config.settings import settings
 
 logger = logging.getLogger("agent_orchestrator")
 
@@ -544,7 +544,7 @@ class AgentOrchestrator(commands.Cog):
                 # Fetch previous messages history safely
                 history_msgs = []
                 total_chars = 0
-                max_chars = int(os.environ.get("MAX_GROUP_CONTEXT_CHARS", 10000))
+                max_chars = settings.MAX_GROUP_CONTEXT_CHARS
 
                 try:
                     async for msg in message.channel.history(limit=10, before=message):
