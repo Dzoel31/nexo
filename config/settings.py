@@ -29,9 +29,7 @@ class Settings(BaseSettings):
     GENERATOR_CHANNEL_ID: int = Field(
         default=0, validation_alias="GENERATOR_CHANNEL_ID"
     )
-    GENERATOR_STAGE_ID: int = Field(
-        default=0, validation_alias="GENERATOR_STAGE_ID"
-    )
+    GENERATOR_STAGE_ID: int = Field(default=0, validation_alias="GENERATOR_STAGE_ID")
     CATEGORY_ID: int = Field(default=0, validation_alias="CATEGORY_ID")
     MEMBER_ROLE_ID: int = Field(default=0, validation_alias="MEMBER_ROLE_ID")
 
