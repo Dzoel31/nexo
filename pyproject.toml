@@ -33,6 +33,10 @@ dev = [
     "ruff>=0.14.10",
 ]
 
+[tool.uv]
+# Keep dependency resolution consistent across local and CI environments.
+exclude-newer = "7 days"
+
 [tool.semantic_release]
 version_toml = ["pyproject.toml:project.version"]
 commit_parser = "conventional"
@@ -74,7 +78,6 @@ asyncio_default_test_loop_scope = "session"
 filterwarnings = [
     "ignore::DeprecationWarning:discord.*",
 ]
-
 
 
 
