@@ -1,18 +1,20 @@
 import asyncio
-from datetime import datetime, timedelta, timezone
 import hashlib
 import inspect
 import json
 import logging
 import re
+from datetime import UTC, datetime, timedelta
 
 import discord
 from discord.ext import commands, tasks
 from sqlalchemy import select
 from sqlalchemy.orm.attributes import flag_modified
 
+from config.settings import settings
 from db.models import ScheduledEvent
 from db.session import async_session
+from utils.auth_helper import has_permission
 from utils.event_classifier import default_event_classifier
 from utils.event_manager import (
     build_reminder_embed,
@@ -23,6 +25,7 @@ from utils.event_manager import (
     prune_reminder_intervals,
     to_wib,
 )
+from utils.gcal_manager import create_gcal_event, delete_gcal_event, list_gcal_events
 from utils.schemas import (
     CheckVoiceChannelSchema,
     ClearMessagesSchema,
@@ -37,9 +40,6 @@ from utils.schemas import (
     get_clean_schema,
 )
 from utils.template_renderer import render_event_template
-from utils.gcal_manager import create_gcal_event, delete_gcal_event, list_gcal_events
-from utils.auth_helper import has_permission
-from config.settings import settings
 
 logger = logging.getLogger("server_events")
 
@@ -299,7 +299,7 @@ class ServerEvents(commands.Cog):
             start_str = f"{event_data.start_date}T{event_data.start_time}+07:00"
             start_dt = datetime.fromisoformat(start_str)
 
-            now_utc = datetime.now(timezone.utc)
+            now_utc = datetime.now(UTC)
             if start_dt <= now_utc:
                 return "❌ Gagal membuat acara: Waktu mulai acara tidak boleh di masa lalu. Harap tentukan tanggal dan jam di masa mendatang."
 
@@ -375,7 +375,7 @@ class ServerEvents(commands.Cog):
                         broadcast_channel = await self.bot.fetch_channel(
                             announcement_channel_id
                         )
-                    except Exception:
+                    except Exception:  # noqa: BLE001
                         broadcast_channel = None
 
             if not broadcast_channel:
@@ -432,7 +432,7 @@ class ServerEvents(commands.Cog):
                             everyone=True, roles=True, users=True
                         ),
                     )
-                except Exception as b_err:
+                except Exception as b_err:  # noqa: BLE001
                     logger.error(f"Failed to send initial event broadcast: {b_err}")
 
             # Classify event using Hybrid Event Classifier
@@ -485,9 +485,9 @@ class ServerEvents(commands.Cog):
                 f"🔗 Link Event: {event_url}"
             )
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             # Error can come from Pydantic (wrong format) or Discord API (400 Bad Request, past time, etc.)
-            return f"❌ Failed to create event. Error: {str(e)} (If this is a 'Cannot schedule event in the past' error, it means you set the wrong time/date, make sure to set a future time)."
+            return f"❌ Failed to create event. Error: {e!s} (If this is a 'Cannot schedule event in the past' error, it means you set the wrong time/date, make sure to set a future time)."
 
     async def list_events_handler(self, arguments: dict, ctx_obj=None) -> str:
         """Handler to list Discord Scheduled Events on the server (token-efficient)."""
@@ -503,7 +503,7 @@ class ServerEvents(commands.Cog):
 
             try:
                 events = await guild.fetch_scheduled_events()
-            except Exception as fetch_err:
+            except Exception as fetch_err:  # noqa: BLE001
                 logger.warning(
                     f"Could not fetch scheduled events via API, fallback to cache: {fetch_err}"
                 )
@@ -544,9 +544,9 @@ class ServerEvents(commands.Cog):
                 lines.append(f"- [{status_str}] {e.name} (ID: {e.id}) @ {time_str} WIB")
 
             return "\n".join(lines)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error in list_events_handler: {e}")
-            return f"❌ Gagal mengambil daftar acara: {str(e)}"
+            return f"❌ Gagal mengambil daftar acara: {e!s}"
 
     async def end_event_handler(self, arguments: dict, ctx_obj=None) -> str:
         """Handler to end/stop a Discord Scheduled Event via tool calling with robust target resolution"""
@@ -576,7 +576,7 @@ class ServerEvents(commands.Cog):
                         target_event = await guild.fetch_scheduled_event(
                             req_data.event_id
                         )
-                    except Exception:
+                    except Exception:  # noqa: BLE001
                         target_event = None
                 if not target_event:
                     return f"❌ Tidak ditemukan acara dengan ID {req_data.event_id} di server."
@@ -584,7 +584,7 @@ class ServerEvents(commands.Cog):
             elif req_data.event_name:
                 try:
                     events = await guild.fetch_scheduled_events()
-                except Exception:
+                except Exception:  # noqa: BLE001
                     events = list(guild.scheduled_events)
 
                 target_name_lower = req_data.event_name.lower().strip()
@@ -600,7 +600,7 @@ class ServerEvents(commands.Cog):
             else:
                 try:
                     events = await guild.fetch_scheduled_events()
-                except Exception:
+                except Exception:  # noqa: BLE001
                     events = list(guild.scheduled_events)
 
                 active_events = [
@@ -621,7 +621,7 @@ class ServerEvents(commands.Cog):
                 if target_event.status == discord.EventStatus.active:
                     try:
                         await target_event.end()
-                    except Exception as end_err:
+                    except Exception as end_err:  # noqa: BLE001
                         logger.warning(
                             f"target_event.end() failed: {end_err}, falling back to delete()"
                         )
@@ -632,14 +632,14 @@ class ServerEvents(commands.Cog):
                             await target_event.cancel()
                         else:
                             await target_event.delete()
-                    except Exception as cancel_err:
+                    except Exception as cancel_err:  # noqa: BLE001
                         logger.warning(
                             f"target_event.cancel() failed: {cancel_err}, falling back to delete()"
                         )
                         await target_event.delete()
                 else:
                     await target_event.delete()
-            except Exception as discord_err:
+            except Exception as discord_err:  # noqa: BLE001
                 logger.error(
                     f"Failed to end/delete discord event via API: {discord_err}"
                 )
@@ -694,13 +694,13 @@ class ServerEvents(commands.Cog):
                             everyone=True, roles=True, users=True
                         ),
                     )
-                except Exception as c_err:
+                except Exception as c_err:  # noqa: BLE001
                     logger.error(f"Failed to send broadcast completed message: {c_err}")
 
             return f"✅ Acara '{target_event.name}' berhasil diakhiri dan ditutup dari daftar server."
 
-        except Exception as e:
-            return f"❌ Gagal mengakhiri acara. Error: {str(e)}"
+        except Exception as e:  # noqa: BLE001
+            return f"❌ Gagal mengakhiri acara. Error: {e!s}"
 
     async def create_thread_handler(self, arguments: dict, ctx_obj=None):
         try:
@@ -731,8 +731,8 @@ class ServerEvents(commands.Cog):
 
             return f"✅ Successfully created a thread named '{thread.name}'. Invite the user to continue the chat in that thread: <#{thread.id}>."
 
-        except Exception as e:
-            return f"❌ Failed to create thread. Error: {str(e)}"
+        except Exception as e:  # noqa: BLE001
+            return f"❌ Failed to create thread. Error: {e!s}"
 
     async def create_poll_handler(self, arguments: dict, ctx_obj=None):
         try:
@@ -763,8 +763,8 @@ class ServerEvents(commands.Cog):
 
             await channel.send(poll=poll)
             return f"✅ Successfully created a poll with the question: '{poll_data.question}'"
-        except Exception as e:
-            return f"❌ Failed to create poll. Error: {str(e)}"
+        except Exception as e:  # noqa: BLE001
+            return f"❌ Failed to create poll. Error: {e!s}"
 
     async def end_poll_handler(self, arguments: dict, ctx_obj=None):
         try:
@@ -815,8 +815,8 @@ class ServerEvents(commands.Cog):
             )
         except discord.Forbidden:
             return "❌ I don't have permission to end this poll (requires 'Manage Messages' permission or bot must be the creator)."
-        except Exception as e:
-            return f"❌ Failed to end poll. Error: {str(e)}"
+        except Exception as e:  # noqa: BLE001
+            return f"❌ Failed to end poll. Error: {e!s}"
 
     async def check_voice_channel_handler(self, arguments: dict, ctx_obj=None) -> str:
         try:
@@ -835,11 +835,14 @@ class ServerEvents(commands.Cog):
                         break
 
             # 2. Fallback to current channel if it is a Voice/Stage Channel (Voice Chat text channel)
-            if not target_vc and hasattr(ctx_obj, "channel"):
-                if isinstance(
+            if (
+                not target_vc
+                and hasattr(ctx_obj, "channel")
+                and isinstance(
                     ctx_obj.channel, (discord.VoiceChannel, discord.StageChannel)
-                ):
-                    target_vc = ctx_obj.channel
+                )
+            ):
+                target_vc = ctx_obj.channel
 
             # 3. Fallback to the user's currently connected Voice Channel
             if not target_vc:
@@ -867,9 +870,9 @@ class ServerEvents(commands.Cog):
                 + "\n".join(member_list)
             )
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error in check_voice_channel_handler: {e}")
-            return f"❌ Failed to check voice channel: {str(e)}"
+            return f"❌ Failed to check voice channel: {e!s}"
 
     async def get_channels_handler(self, arguments: dict, ctx_obj=None):
         try:
@@ -885,8 +888,8 @@ class ServerEvents(commands.Cog):
                     {"id": str(c.id), "name": c.name, "type": str(c.type)}
                 )
             return json.dumps(channels_info, indent=2)
-        except Exception as e:
-            return f"❌ Failed to get channel list: {str(e)}"
+        except Exception as e:  # noqa: BLE001
+            return f"❌ Failed to get channel list: {e!s}"
 
     async def get_roles_handler(self, arguments: dict, ctx_obj=None):
         try:
@@ -900,8 +903,8 @@ class ServerEvents(commands.Cog):
                 if r.name != "@everyone"
             ]
             return json.dumps(roles_info, indent=2)
-        except Exception as e:
-            return f"❌ Failed to get role list: {str(e)}"
+        except Exception as e:  # noqa: BLE001
+            return f"❌ Failed to get role list: {e!s}"
 
     async def clear_messages_handler(self, arguments: dict, ctx_obj=None):
         try:
@@ -923,8 +926,8 @@ class ServerEvents(commands.Cog):
             )
             return f"✅ Processing message deletion (Limit: {limit}, Only Today: {req_data.only_today}) in the background. Tell the user to wait a moment."
 
-        except Exception as e:
-            return f"❌ Failed to process clear_messages: {str(e)}"
+        except Exception as e:  # noqa: BLE001
+            return f"❌ Failed to process clear_messages: {e!s}"
 
     async def _background_delete(self, channel, limit: int, only_today: bool):
         try:
@@ -949,7 +952,7 @@ class ServerEvents(commands.Cog):
             )
         except discord.HTTPException as e:
             logger.error(f"Failed to delete messages (HTTP Exception): {e}")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Unexpected error during message purge: {e}")
 
     @commands.Cog.listener()
@@ -981,7 +984,7 @@ class ServerEvents(commands.Cog):
             )
         except discord.HTTPException as e:
             logger.error(f"Failed to send welcome message (HTTP Exception): {e}")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Unexpected error during welcome message: {e}")
 
     @commands.Cog.listener()
@@ -1076,18 +1079,18 @@ class ServerEvents(commands.Cog):
                     "⚠️ The KSM AIoT Bot does not have permission to assign the role or change your nickname.",
                     delete_after=10,
                 )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 logger.error(f"Error processing introduction: {e}")
 
     @tasks.loop(seconds=60)
     async def reminder_loop(self):
         """Background task checking scheduled event reminders, auto-start, and auto-end every 60s"""
         try:
-            now_utc = datetime.now(timezone.utc)
+            now_utc = datetime.now(UTC)
             async with async_session() as session:
                 result = await session.execute(
                     select(ScheduledEvent).where(
-                        ScheduledEvent.is_active == True,  # noqa: E712
+                        ScheduledEvent.is_active.is_(True),
                     )
                 )
                 active_events = result.scalars().all()
@@ -1105,7 +1108,7 @@ class ServerEvents(commands.Cog):
                         if not discord_event:
                             try:
                                 discord_event = await guild.fetch_scheduled_event(ev.id)
-                            except Exception:
+                            except Exception:  # noqa: BLE001
                                 discord_event = None
 
                     # 1. AUTO-END: Check if event has ended
@@ -1119,7 +1122,7 @@ class ServerEvents(commands.Cog):
                                 logger.info(
                                     f"Auto-ended scheduled event {ev.id} ({ev.name})"
                                 )
-                            except Exception as end_err:
+                            except Exception as end_err:  # noqa: BLE001
                                 logger.warning(
                                     f"Could not auto-end discord event {ev.id}: {end_err}"
                                 )
@@ -1158,7 +1161,7 @@ class ServerEvents(commands.Cog):
                                             everyone=True, roles=True, users=True
                                         ),
                                     )
-                                except Exception as comp_err:
+                                except Exception as comp_err:  # noqa: BLE001
                                     logger.error(
                                         f"Failed to send completion broadcast: {comp_err}"
                                     )
@@ -1192,7 +1195,7 @@ class ServerEvents(commands.Cog):
                                 logger.info(
                                     f"Auto-started scheduled event {ev.id} ({ev.name})"
                                 )
-                            except Exception as start_api_err:
+                            except Exception as start_api_err:  # noqa: BLE001
                                 logger.warning(
                                     f"Could not auto-start discord event {ev.id}: {start_api_err}"
                                 )
@@ -1204,7 +1207,7 @@ class ServerEvents(commands.Cog):
                                 channel = await self.bot.fetch_channel(
                                     ev.broadcast_channel_id
                                 )
-                            except Exception:
+                            except Exception:  # noqa: BLE001
                                 channel = None
 
                         if channel:
@@ -1243,7 +1246,7 @@ class ServerEvents(commands.Cog):
                                 logger.info(
                                     f"Berhasil mengirim broadcast started untuk event '{ev.name}'"
                                 )
-                            except Exception as start_err:
+                            except Exception as start_err:  # noqa: BLE001
                                 logger.error(
                                     f"Failed to send started broadcast for event {ev.id}: {start_err}"
                                 )
@@ -1269,7 +1272,7 @@ class ServerEvents(commands.Cog):
                                     channel = await self.bot.fetch_channel(
                                         ev.broadcast_channel_id
                                     )
-                                except Exception:
+                                except Exception:  # noqa: BLE001
                                     channel = None
 
                             if channel:
@@ -1295,7 +1298,7 @@ class ServerEvents(commands.Cog):
                                             everyone=True, roles=True, users=True
                                         ),
                                     )
-                                except Exception as send_err:
+                                except Exception as send_err:  # noqa: BLE001
                                     logger.error(
                                         f"Failed to send reminder for event {ev.id}: {send_err}"
                                     )
@@ -1310,7 +1313,7 @@ class ServerEvents(commands.Cog):
                         await session.commit()
 
                 await session.commit()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error in reminder_loop: {e}")
 
     @tasks.loop(minutes=15)
@@ -1319,10 +1322,10 @@ class ServerEvents(commands.Cog):
         if not self.bot.guilds:
             return
 
-        now_utc = datetime.now(timezone.utc)
+        now_utc = datetime.now(UTC)
         try:
             gcal_items = await list_gcal_events(time_min=now_utc)
-        except Exception as gcal_err:
+        except Exception as gcal_err:  # noqa: BLE001
             logger.error(f"Error listing gcal events in sync loop: {gcal_err}")
             return
 
@@ -1360,7 +1363,7 @@ class ServerEvents(commands.Cog):
 
                     start_dt = datetime.fromisoformat(start_iso)
                     if start_dt.tzinfo is None:
-                        start_dt = start_dt.replace(tzinfo=timezone.utc)
+                        start_dt = start_dt.replace(tzinfo=UTC)
 
                     end_dt = (
                         datetime.fromisoformat(end_iso)
@@ -1368,7 +1371,7 @@ class ServerEvents(commands.Cog):
                         else start_dt + timedelta(hours=2)
                     )
                     if end_dt.tzinfo is None:
-                        end_dt = end_dt.replace(tzinfo=timezone.utc)
+                        end_dt = end_dt.replace(tzinfo=UTC)
 
                     name = item.get("summary", "Kegiatan KSM AIoT")
                     desc = item.get(
@@ -1379,7 +1382,7 @@ class ServerEvents(commands.Cog):
                     ev_type = detect_event_type(name, is_all_day=is_all_day)
 
                     # Cek validitas waktu terhadap masa sekarang (Anti-Past Event Error)
-                    current_now_utc = datetime.now(timezone.utc)
+                    current_now_utc = datetime.now(UTC)
                     if end_dt <= current_now_utc:
                         # 1. Event sudah selesai sepenuhnya di masa lalu -> Skip dengan tenang
                         logger.debug(
@@ -1558,7 +1561,7 @@ class ServerEvents(commands.Cog):
                                 if broadcast_msg:
                                     db_record.broadcast_message_id = broadcast_msg.id
                                     await session.commit()
-                            except Exception as b_err:
+                            except Exception as b_err:  # noqa: BLE001
                                 logger.error(
                                     f"Failed to send initial event broadcast for GCal event: {b_err}"
                                 )
@@ -1566,7 +1569,7 @@ class ServerEvents(commands.Cog):
                         logger.info(
                             f"Berhasil mensinkronkan event '{name}' ({ev_type}/{classification.label}) dari Google Calendar ke Discord!"
                         )
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001
                         logger.error(f"Gagal membuat Discord Event dari GCal: {e}")
 
     @reminder_loop.before_loop
@@ -1674,13 +1677,13 @@ class ServerEvents(commands.Cog):
                             everyone=True, roles=True, users=True
                         ),
                     )
-                except Exception as b_err:
+                except Exception as b_err:  # noqa: BLE001
                     logger.error(
                         f"Failed to send initial broadcast on_scheduled_event_create: {b_err}"
                     )
 
             ev_type = detect_event_type(event.name)
-            now_utc = datetime.now(timezone.utc)
+            now_utc = datetime.now(UTC)
             pruned_intervals = prune_reminder_intervals(
                 start_dt, now_utc, event_type=ev_type
             )
@@ -1718,10 +1721,8 @@ class ServerEvents(commands.Cog):
             logger.info(
                 f"Successfully synced UI-created Discord event '{event.name}' ({classification.label}) to DB and Google Calendar."
             )
-        except Exception as err:
-            logger.error(
-                f"Error handling on_scheduled_event_create: {err}", exc_info=True
-            )
+        except Exception:
+            logger.exception("Error handling on_scheduled_event_create")
 
     @commands.Cog.listener()
     async def on_scheduled_event_update(
@@ -1767,7 +1768,7 @@ class ServerEvents(commands.Cog):
                                 channel = await self.bot.fetch_channel(
                                     db_event.broadcast_channel_id
                                 )
-                            except Exception:
+                            except Exception:  # noqa: BLE001
                                 channel = None
 
                         if channel:
@@ -1805,7 +1806,7 @@ class ServerEvents(commands.Cog):
                                 logger.info(
                                     f"Broadcast started dikirim via on_scheduled_event_update untuk '{db_event.name}'"
                                 )
-                            except Exception as start_err:
+                            except Exception as start_err:  # noqa: BLE001
                                 logger.error(
                                     f"Failed to send started broadcast on update: {start_err}"
                                 )
@@ -1824,7 +1825,7 @@ class ServerEvents(commands.Cog):
                             after.start_time
                         )
                         # Reset sent reminders whose triggers are now in the future
-                        now_utc = datetime.now(timezone.utc)
+                        now_utc = datetime.now(UTC)
                         db_event.reminders_sent = [
                             i
                             for i in (db_event.reminders_sent or [])
@@ -1837,7 +1838,7 @@ class ServerEvents(commands.Cog):
                         db_event.end_time = after.end_time
 
                 await session.commit()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error handling scheduled event update: {e}")
 
     @commands.Cog.listener()
@@ -1852,7 +1853,7 @@ class ServerEvents(commands.Cog):
                 if db_event:
                     db_event.is_active = False
                     await session.commit()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error handling scheduled event delete: {e}")
 
     @commands.Cog.listener()
@@ -1915,15 +1916,18 @@ class ServerEvents(commands.Cog):
                 logger.error(f"Failed to create temp stage: {e}")
                 return
 
-        if before.channel and before.channel.id in self.active_temp_channels:
-            if len(before.channel.members) == 0:
-                try:
-                    self.active_temp_channels.remove(before.channel.id)
-                    await before.channel.delete(reason="Temp channel empty.")
-                except discord.NotFound:
-                    pass
-                except discord.HTTPException as e:
-                    logger.error(f"Failed to delete temp channel: {e}")
+        if (
+            before.channel
+            and before.channel.id in self.active_temp_channels
+            and len(before.channel.members) == 0
+        ):
+            try:
+                self.active_temp_channels.remove(before.channel.id)
+                await before.channel.delete(reason="Temp channel empty.")
+            except discord.NotFound:
+                pass
+            except discord.HTTPException as e:
+                logger.error(f"Failed to delete temp channel: {e}")
 
 
 async def setup(bot):

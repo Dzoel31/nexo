@@ -1,13 +1,14 @@
 import asyncio
-from datetime import datetime, timezone
 import json
 import logging
 import time
+from datetime import UTC, datetime
 
 import discord
 from discord import app_commands
 from discord.ext import commands
 
+from config.settings import settings
 from db.repository import (
     check_and_trigger_rolling_summary,
     count_token,
@@ -22,7 +23,6 @@ from utils.mcp_client import (
     process_with_mcp_tools,
     sanitize_tools_list,
 )
-from config.settings import settings
 
 logger = logging.getLogger("agent_orchestrator")
 
@@ -44,7 +44,7 @@ class AgentOrchestrator(commands.Cog):
         try:
             if not hasattr(self.bot, "cached_mcp_tools"):
                 self.bot.cached_mcp_tools = await get_tools_from_mcp_server()
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning(f"MCP Server not available on startup: {e}")
 
         # Pre-calculate static base token overhead once
@@ -65,7 +65,7 @@ class AgentOrchestrator(commands.Cog):
                 f"Pre-calculated Base Overhead: {self.bot.base_overhead_tokens} tokens "
                 f"(System: {sys_tok}, Tools: {tools_tok})"
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             self.bot.base_overhead_tokens = 1400
             logger.warning(f"Could not pre-calculate base token overhead: {e}")
 
@@ -128,7 +128,7 @@ class AgentOrchestrator(commands.Cog):
                         async with channel.typing():
                             (
                                 reply,
-                                used_tools,
+                                _used_tools,
                                 usage,
                                 elapsed_s,
                             ) = await process_with_mcp_tools(
@@ -191,36 +191,38 @@ class AgentOrchestrator(commands.Cog):
 
                             async def on_compaction_start():
                                 try:
-                                    embed.set_footer(
-                                        text=f"{base_footer} • 🧠 Merangkum memori..."
+                                    embed.set_footer(  # noqa: B023
+                                        text=f"{base_footer} • 🧠 Merangkum memori..."  # noqa: B023
                                     )
-                                    if is_interaction and hasattr(
-                                        ctx_obj, "edit_original_response"
+                                    if is_interaction and hasattr(  # noqa: B023
+                                        ctx_obj,
+                                        "edit_original_response",  # noqa: B023
                                     ):
-                                        await ctx_obj.edit_original_response(
-                                            embed=embed
+                                        await ctx_obj.edit_original_response(  # noqa: B023
+                                            embed=embed  # noqa: B023
                                         )
-                                    elif sent_msg and hasattr(sent_msg, "edit"):
-                                        await sent_msg.edit(embed=embed)
-                                except Exception as cb_err:
+                                    elif sent_msg and hasattr(sent_msg, "edit"):  # noqa: B023
+                                        await sent_msg.edit(embed=embed)  # noqa: B023
+                                except Exception as cb_err:  # noqa: BLE001
                                     logger.debug(
                                         f"Failed to update compaction start footer: {cb_err}"
                                     )
 
                             async def on_compaction_end():
                                 try:
-                                    embed.set_footer(
-                                        text=f"{base_footer} • 🧠 Memori terpadatkan"
+                                    embed.set_footer(  # noqa: B023
+                                        text=f"{base_footer} • 🧠 Memori terpadatkan"  # noqa: B023
                                     )
-                                    if is_interaction and hasattr(
-                                        ctx_obj, "edit_original_response"
+                                    if is_interaction and hasattr(  # noqa: B023
+                                        ctx_obj,
+                                        "edit_original_response",  # noqa: B023
                                     ):
-                                        await ctx_obj.edit_original_response(
-                                            embed=embed
+                                        await ctx_obj.edit_original_response(  # noqa: B023
+                                            embed=embed  # noqa: B023
                                         )
-                                    elif sent_msg and hasattr(sent_msg, "edit"):
-                                        await sent_msg.edit(embed=embed)
-                                except Exception as cb_err:
+                                    elif sent_msg and hasattr(sent_msg, "edit"):  # noqa: B023
+                                        await sent_msg.edit(embed=embed)  # noqa: B023
+                                except Exception as cb_err:  # noqa: BLE001
                                     logger.debug(
                                         f"Failed to update compaction end footer: {cb_err}"
                                     )
@@ -238,7 +240,7 @@ class AgentOrchestrator(commands.Cog):
                         if reply:
                             await channel.send(f"<@{user_id}> {reply}")
                     except Exception as e:
-                        logger.error(
+                        logger.error(  # noqa: G201
                             f"Unexpected error while processing AI request for user {user_id}: {e}",
                             exc_info=True,
                         )
@@ -285,7 +287,7 @@ class AgentOrchestrator(commands.Cog):
         if not getattr(self.bot, "cached_mcp_tools", []):
             try:
                 self.bot.cached_mcp_tools = await get_tools_from_mcp_server()
-            except Exception:
+            except Exception:  # noqa: BLE001
                 await interaction.edit_original_response(
                     content="⚠️ Failed to fetch tools from the MCP Server."
                 )
@@ -316,7 +318,7 @@ class AgentOrchestrator(commands.Cog):
             else:
                 await interaction.response.send_message(msg, ephemeral=True)
         else:
-            logger.error(f"Error in /tanya slash command: {error}", exc_info=True)
+            logger.error(f"Error in /tanya slash command: {error}")
             if not interaction.response.is_done():
                 await interaction.response.send_message(
                     "❌ Terjadi kesalahan saat memproses perintah.", ephemeral=True
@@ -334,7 +336,7 @@ class AgentOrchestrator(commands.Cog):
         embed = discord.Embed(
             title=f"📊 Token Usage Statistics — {interaction.user.display_name}",
             color=discord.Color.teal(),
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
         )
         embed.add_field(
             name="📥 Prompt Tokens (Input)",
@@ -374,7 +376,7 @@ class AgentOrchestrator(commands.Cog):
         embed = discord.Embed(
             title=f"📊 Token Usage Statistics — {ctx.author.display_name}",
             color=discord.Color.teal(),
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
         )
         embed.add_field(
             name="📥 Prompt Tokens",
@@ -433,7 +435,7 @@ class AgentOrchestrator(commands.Cog):
                 "**Top 10 Active AI Users:**"
             ),
             color=discord.Color.gold(),
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
         )
 
         if not leaderboard:
@@ -477,7 +479,7 @@ class AgentOrchestrator(commands.Cog):
                 "**Top 10 Active AI Users:**"
             ),
             color=discord.Color.gold(),
-            timestamp=datetime.now(timezone.utc),
+            timestamp=datetime.now(UTC),
         )
 
         if not leaderboard:
@@ -530,7 +532,7 @@ class AgentOrchestrator(commands.Cog):
                         f"⏳ Harap tunggu **{remaining} detik** sebelum bertanya lagi ya!",
                         delete_after=4,
                     )
-                except Exception:
+                except Exception:  # noqa: S110, BLE001
                     pass
                 return
             self._mention_cooldowns[message.author.id] = now
@@ -555,7 +557,7 @@ class AgentOrchestrator(commands.Cog):
                                 break
                             history_msgs.append(formatted_msg)
                             total_chars += len(formatted_msg)
-                except Exception as hist_err:
+                except Exception as hist_err:  # noqa: BLE001
                     logger.warning(
                         f"Could not fetch channel history (permission or channel type): {hist_err}"
                     )
@@ -599,7 +601,7 @@ class AgentOrchestrator(commands.Cog):
                     (message, final_prompt, time.time(), queue_status_msg)
                 )
 
-            except Exception as tag_err:
+            except Exception as tag_err:  # noqa: BLE001
                 logger.error(f"Error handling mentioned message: {tag_err}")
 
 

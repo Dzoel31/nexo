@@ -1,17 +1,18 @@
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
+
 import discord
 
 logger = logging.getLogger("auth_helper")
 
 ROLES_CONFIG_PATH = Path("config/roles.json")
-_ROLES_CACHE: Dict[str, int] = {}
+_ROLES_CACHE: dict[str, int] = {}
 _ROLES_CACHE_MTIME: float = 0.0
 
 
-def load_roles_config() -> Dict[str, int]:
+def load_roles_config() -> dict[str, int]:
     """Loads and caches role ID mappings from config/roles.json."""
     global _ROLES_CACHE, _ROLES_CACHE_MTIME
     if not ROLES_CONFIG_PATH.exists():
@@ -22,7 +23,7 @@ def load_roles_config() -> Dict[str, int]:
         if current_mtime != _ROLES_CACHE_MTIME:
             with open(ROLES_CONFIG_PATH, "r", encoding="utf-8") as f:
                 raw_data = json.load(f)
-                parsed: Dict[str, int] = {}
+                parsed: dict[str, int] = {}
                 if isinstance(raw_data, dict):
                     for name, role_id_str in raw_data.items():
                         if str(role_id_str).strip().isdigit():
@@ -31,12 +32,12 @@ def load_roles_config() -> Dict[str, int]:
                 _ROLES_CACHE_MTIME = current_mtime
                 logger.info(f"Loaded {len(_ROLES_CACHE)} roles from config/roles.json")
         return _ROLES_CACHE
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.warning(f"Failed to load roles from config/roles.json: {e}")
         return _ROLES_CACHE
 
 
-def get_member_from_context(ctx_obj: Any) -> Optional[discord.Member]:
+def get_member_from_context(ctx_obj: Any) -> discord.Member | None:
     """
     Safely extracts a discord.Member object from either discord.Interaction,
     discord.Message, commands.Context, or custom member objects.
@@ -102,7 +103,7 @@ def has_role(member: Any, *role_names: str) -> bool:
 def has_permission(
     ctx_obj: Any,
     permission_name: str,
-    allowed_roles: Optional[List[str]] = None,
+    allowed_roles: list[str] | None = None,
 ) -> bool:
     """
     Comprehensive authorization check:
@@ -132,7 +133,4 @@ def has_permission(
             return True
 
     # Check Role Whitelist Fallback
-    if allowed_roles and has_role(member, *allowed_roles):
-        return True
-
-    return False
+    return bool(allowed_roles and has_role(member, *allowed_roles))

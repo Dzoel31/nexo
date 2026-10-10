@@ -1,6 +1,8 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from sqlalchemy import text
+
 from db.models import MessageRole
 from db.repository import (
     CONVERSATION_TTL,
@@ -41,12 +43,12 @@ async def test_conversation_sliding_ttl():
         await save_message(conv.id, MessageRole.ASSISTANT, "Halo! Nexo siap membantu.")
 
         # 4. Context within TTL should be active
-        summary, messages, total_tokens = await get_conversation_context(test_user_id)
+        _summary, messages, total_tokens = await get_conversation_context(test_user_id)
         assert len(messages) == 2
         assert total_tokens > 0
 
         # 5. Simulate 25 hours of inactivity (> 24h CONVERSATION_TTL)
-        past_time = datetime.now(timezone.utc) - (CONVERSATION_TTL + timedelta(hours=1))
+        past_time = datetime.now(UTC) - (CONVERSATION_TTL + timedelta(hours=1))
         async with async_session() as session:
             await session.execute(
                 text(

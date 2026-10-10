@@ -1,15 +1,16 @@
 import asyncio
-from collections import OrderedDict
-from datetime import datetime, timedelta, timezone
 import hashlib
 import inspect
 import logging
 import uuid
+from collections import OrderedDict
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import JSON, bindparam, text
 from openai import AsyncOpenAI
+from sqlalchemy import JSON, bindparam, text
 
+from config.settings import settings
 from db.models import MessageRole
 from db.schemas import (
     CompetitionCreate,
@@ -22,7 +23,6 @@ from db.schemas import (
     ScheduledAnnouncementRead,
 )
 from db.session import async_session
-from config.settings import settings
 
 logger = logging.getLogger("chat_repository")
 
@@ -109,7 +109,7 @@ async def count_token(text_content: str) -> int:
             input=text_content,
         )
         token_count = int(response.input_tokens)
-    except Exception:
+    except Exception:  # noqa: BLE001
         # Fallback estimation if tokenize endpoint offline or fails
         token_count = max(1, len(text_content) // 4)
     finally:
@@ -135,7 +135,7 @@ async def get_or_create_conversation(
     Getting an active conversation based on user_id or creating a new one using raw SQL.
     Implements 24-hour sliding TTL expiration for inactive conversations.
     """
-    now_utc = datetime.now(timezone.utc)
+    now_utc = datetime.now(UTC)
     async with async_session() as session:
         select_sql = text("""
             SELECT id, user_id, channel_id, summary, created_at, updated_at
@@ -181,7 +181,7 @@ async def get_or_create_conversation(
         last_activity = row["updated_at"]
         if last_activity:
             if last_activity.tzinfo is None:
-                last_activity = last_activity.replace(tzinfo=timezone.utc)
+                last_activity = last_activity.replace(tzinfo=UTC)
 
             if (now_utc - last_activity) >= CONVERSATION_TTL:
                 logger.info(
@@ -251,7 +251,7 @@ async def save_message(
         token_count = await count_token(content)
 
     payload = MessageCreate(role=role, content=content, token_count=token_count)
-    now_utc = datetime.now(timezone.utc)
+    now_utc = datetime.now(UTC)
     new_msg_id = uuid.uuid4()
 
     role_val = (
@@ -316,7 +316,7 @@ async def get_conversation_context(
     Retrieves conversation context for LLM based on token quota using incremental token counts and raw SQL.
     Returns (summary, list_messages_for_llm, total_conversation_tokens).
     """
-    now_utc = datetime.now(timezone.utc)
+    now_utc = datetime.now(UTC)
     async with async_session() as session:
         conv_sql = text("""
             SELECT id, summary, updated_at
@@ -334,7 +334,7 @@ async def get_conversation_context(
         last_activity = conv_row["updated_at"]
         if last_activity:
             if last_activity.tzinfo is None:
-                last_activity = last_activity.replace(tzinfo=timezone.utc)
+                last_activity = last_activity.replace(tzinfo=UTC)
 
             if (now_utc - last_activity) >= CONVERSATION_TTL:
                 logger.info(
@@ -480,7 +480,7 @@ async def check_and_trigger_rolling_summary(
                 res = on_compaction_start()
                 if inspect.isawaitable(res):
                     await res
-            except Exception as cb_err:
+            except Exception as cb_err:  # noqa: BLE001
                 logger.warning(f"Error in on_compaction_start callback: {cb_err}")
 
         old_dialogue = "\n".join(
@@ -549,7 +549,7 @@ async def check_and_trigger_rolling_summary(
                 f"Summarized & purged {len(to_summarize)} messages (~{total_tokens - retained_tokens} tokens saved)."
             )
 
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Failed to execute rolling summary for user {user_id}: {e}")
         finally:
             if callable(on_compaction_end):
@@ -557,7 +557,7 @@ async def check_and_trigger_rolling_summary(
                     res = on_compaction_end()
                     if inspect.isawaitable(res):
                         await res
-                except Exception as cb_err:
+                except Exception as cb_err:  # noqa: BLE001
                     logger.warning(f"Error in on_compaction_end callback: {cb_err}")
 
 
@@ -587,7 +587,7 @@ async def log_token_usage(
 ) -> None:
     """Stores token usage and latency asynchronously in PostgreSQL using raw SQL."""
     try:
-        now_utc = datetime.now(timezone.utc)
+        now_utc = datetime.now(UTC)
         async with async_session() as session:
             insert_sql = text("""
                 INSERT INTO token_usage_logs (
@@ -611,7 +611,7 @@ async def log_token_usage(
                 },
             )
             await session.commit()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error(f"Failed to save token usage log: {e}")
 
 
@@ -744,7 +744,7 @@ async def create_scheduled_announcement(
         title=title,
     )
     new_id = uuid.uuid4()
-    now_utc = datetime.now(timezone.utc)
+    now_utc = datetime.now(UTC)
     async with async_session() as session:
         insert_sql = text("""
             INSERT INTO scheduled_announcements (
@@ -861,7 +861,7 @@ async def create_competition(
         description=description,
         target_role_id=target_role_id,
     )
-    now_utc = datetime.now(timezone.utc)
+    now_utc = datetime.now(UTC)
     async with async_session() as session:
         insert_sql = text("""
             INSERT INTO competitions (

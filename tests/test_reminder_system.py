@@ -1,7 +1,10 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
-import pytest
+
 import discord
+import pytest
+
+from cogs.server_events import ServerEvents
 from utils.event_manager import (
     build_reminder_embed,
     detect_event_type,
@@ -9,7 +12,6 @@ from utils.event_manager import (
     get_reminder_intervals_for_type,
     prune_reminder_intervals,
 )
-from cogs.server_events import ServerEvents
 
 
 def test_detect_event_type():
@@ -46,7 +48,7 @@ def test_human_time_labels():
 
 
 def test_prune_reminder_intervals_by_type():
-    now = datetime(2026, 9, 2, 10, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 9, 2, 10, 0, tzinfo=UTC)
 
     # Event starts in 2 days (2880 mins from now)
     start_in_2d = now + timedelta(days=2)
@@ -64,7 +66,7 @@ def test_prune_reminder_intervals_by_type():
 
 
 def test_build_reminder_embed():
-    start_dt = datetime(2026, 9, 5, 13, 0, tzinfo=timezone.utc)
+    start_dt = datetime(2026, 9, 5, 13, 0, tzinfo=UTC)
 
     # DEADLINE Embed
     dl_embed = build_reminder_embed(
@@ -101,7 +103,7 @@ async def test_reminder_loop_deduplication_and_embed_send():
     bot.get_channel = MagicMock(return_value=channel)
     bot.guilds = [MagicMock()]
 
-    now_utc = datetime.now(timezone.utc)
+    now_utc = datetime.now(UTC)
     ev_start = now_utc + timedelta(
         minutes=45
     )  # 45 mins from now -> 60m reminder is due!

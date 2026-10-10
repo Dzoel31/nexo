@@ -1,12 +1,15 @@
 import asyncio
+import logging
 import re
 import uuid
-from datetime import datetime, timedelta, timezone
-import discord
-import logging
+from datetime import UTC, datetime, timedelta, timezone
+
 import aiohttp
+import discord
 from discord import app_commands
 from discord.ext import commands, tasks
+
+from config.settings import settings
 from db.repository import (
     cancel_scheduled_announcement,
     create_scheduled_announcement,
@@ -16,7 +19,6 @@ from db.repository import (
     reset_conversation_history,
 )
 from utils.auth_helper import has_permission
-from config.settings import settings
 from utils.mcp_client import (
     LLM_BASE_URL,
     MCP_SERVER_URL,
@@ -92,7 +94,7 @@ class HelpView(discord.ui.View):
             mcp_tools = await get_tools_from_mcp_server()
             if mcp_tools:
                 self.bot.cached_mcp_tools = mcp_tools
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning(f"Live MCP retrieval failed during help view: {e}")
 
     async def build_embed(self) -> discord.Embed:
@@ -309,7 +311,7 @@ def parse_scheduled_time(text: str) -> tuple[datetime | None, str]:
     2. --in <digits><m|h|d> (relative delta e.g. --in 30m, --in 2h, --in 1d)
     Returns (scheduled_at_utc, cleaned_text)
     """
-    now_utc = datetime.now(timezone.utc)
+    now_utc = datetime.now(UTC)
     now_wib = now_utc.astimezone(WIB)
     scheduled_at: datetime | None = None
 
@@ -345,7 +347,7 @@ def parse_scheduled_time(text: str) -> tuple[datetime | None, str]:
                 "%Y/%m/%d %H:%M",
             ):
                 try:
-                    dt = datetime.strptime(raw_time_str, fmt)
+                    dt = datetime.strptime(raw_time_str, fmt)  # noqa: DTZ007
                     parsed_dt = dt.replace(tzinfo=WIB)
                     break
                 except ValueError:
@@ -354,7 +356,7 @@ def parse_scheduled_time(text: str) -> tuple[datetime | None, str]:
             # Try time only format (HH:MM)
             if not parsed_dt:
                 try:
-                    t_only = datetime.strptime(raw_time_str, "%H:%M").time()
+                    t_only = datetime.strptime(raw_time_str, "%H:%M").time()  # noqa: DTZ007
                     cand = datetime.combine(now_wib.date(), t_only).replace(tzinfo=WIB)
                     if cand <= now_wib:
                         cand += timedelta(days=1)
@@ -363,7 +365,7 @@ def parse_scheduled_time(text: str) -> tuple[datetime | None, str]:
                     pass
 
             if parsed_dt:
-                scheduled_at = parsed_dt.astimezone(timezone.utc)
+                scheduled_at = parsed_dt.astimezone(UTC)
                 text = text[: time_match.start()] + text[time_match.end() :]
 
     text = re.sub(r" +", " ", text).strip()
@@ -480,7 +482,7 @@ async def resolve_smart_mentions(guild: discord.Guild, text: str) -> str:
                 results = await guild.query_members(target_name, limit=1)
                 if results:
                     member = results[0]
-            except Exception:
+            except Exception:  # noqa: S110, BLE001
                 pass
 
         if member:
@@ -502,7 +504,7 @@ class CoreCommands(commands.Cog):
     async def check_scheduled_announcements(self):
         """Checks and delivers due scheduled announcements."""
         try:
-            now_utc = datetime.now(timezone.utc)
+            now_utc = datetime.now(UTC)
             due_announcements = await get_due_scheduled_announcements(now_utc)
             for item in due_announcements:
                 guild = self.bot.get_guild(item.guild_id)
@@ -548,12 +550,12 @@ class CoreCommands(commands.Cog):
                     logger.info(
                         f"Delivered scheduled announcement {item.id} to #{channel.name}"
                     )
-                except Exception as send_err:
+                except Exception as send_err:  # noqa: BLE001
                     logger.error(
                         f"Failed to deliver scheduled announcement {item.id}: {send_err}"
                     )
                     await mark_announcement_status(item.id, "failed")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error in check_scheduled_announcements loop: {e}")
 
     @check_scheduled_announcements.before_loop
@@ -613,30 +615,34 @@ class CoreCommands(commands.Cog):
             if api_key and api_key != "sk-no-key":
                 llama_headers["Authorization"] = f"Bearer {api_key}"
 
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
+            async with (
+                aiohttp.ClientSession() as session,
+                session.get(
                     f"{LLM_BASE_URL.replace('/v1', '')}/health",
                     headers=llama_headers,
                     timeout=aiohttp.ClientTimeout(total=5),
-                ) as response:
-                    if response.status == 200:
-                        status_messages.append("✅ LLM Provider: ONLINE")
-                    else:
-                        status_messages.append("❌ LLM Provider: UNAVAILABLE")
-        except aiohttp.ClientError, asyncio.TimeoutError:
+                ) as response,
+            ):
+                if response.status == 200:
+                    status_messages.append("✅ LLM Provider: ONLINE")
+                else:
+                    status_messages.append("❌ LLM Provider: UNAVAILABLE")
+        except TimeoutError, aiohttp.ClientError:
             status_messages.append("❌ LLM Provider: UNAVAILABLE")
 
         # Check MCP server
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(
+            async with (
+                aiohttp.ClientSession() as session,
+                session.get(
                     f"{MCP_SERVER_URL}/", timeout=aiohttp.ClientTimeout(total=5)
-                ) as response:
-                    if response.status == 200:
-                        status_messages.append("✅ MCP Server: ONLINE")
-                    else:
-                        status_messages.append("❌ MCP Server: UNAVAILABLE")
-        except aiohttp.ClientError, asyncio.TimeoutError:
+                ) as response,
+            ):
+                if response.status == 200:
+                    status_messages.append("✅ MCP Server: ONLINE")
+                else:
+                    status_messages.append("❌ MCP Server: UNAVAILABLE")
+        except TimeoutError, aiohttp.ClientError:
             status_messages.append("❌ MCP Server: UNAVAILABLE")
 
         await ctx.send("\n".join(status_messages))
@@ -710,7 +716,7 @@ class CoreCommands(commands.Cog):
         await interaction.response.send_message(embed=embed)
 
     @commands.command(name="voice", aliases=["vc", "voicechannel"])
-    async def voice_cmd(self, ctx, *, channel_name: str = None):
+    async def voice_cmd(self, ctx, *, channel_name: str | None = None):
         """Get list of users currently in a voice channel."""
         target_vc = None
 
@@ -760,7 +766,7 @@ class CoreCommands(commands.Cog):
     )
     @app_commands.describe(channel_name="Name of the voice channel to check (optional)")
     async def voice_slash(
-        self, interaction: discord.Interaction, channel_name: str = None
+        self, interaction: discord.Interaction, channel_name: str | None = None
     ):
         target_vc = None
 
@@ -806,7 +812,7 @@ class CoreCommands(commands.Cog):
         await interaction.response.send_message(embed=embed)
 
     @commands.command(name="say")
-    async def say(self, ctx, *, text: str = None):
+    async def say(self, ctx, *, text: str | None = None):
         """
         Sends a message to a destination channel on behalf of the bot.
         Usage:
@@ -937,7 +943,7 @@ class CoreCommands(commands.Cog):
         # Check for scheduling flags (--time or --in)
         scheduled_at, message_body = parse_scheduled_time(message_body)
         if scheduled_at:
-            now_utc = datetime.now(timezone.utc)
+            now_utc = datetime.now(UTC)
             if scheduled_at <= now_utc:
                 return await ctx.send(
                     "⚠️ Waktu jadwal harus berada di masa depan!", delete_after=6
@@ -946,7 +952,7 @@ class CoreCommands(commands.Cog):
             # Try deleting invocation message
             try:
                 await ctx.message.delete()
-            except Exception:
+            except Exception:  # noqa: S110, BLE001
                 pass
 
             announcement = await create_scheduled_announcement(
@@ -972,7 +978,7 @@ class CoreCommands(commands.Cog):
             # Delete invocation message if possible
             try:
                 await ctx.message.delete()
-            except Exception:
+            except Exception:  # noqa: S110, BLE001
                 pass
 
             allowed_mentions = discord.AllowedMentions(
@@ -1012,7 +1018,7 @@ class CoreCommands(commands.Cog):
             await ctx.send(
                 f"❌ Bot tidak memiliki izin mengirim pesan di {target_channel.mention}."
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             await ctx.send(f"❌ Gagal mengirim pesan: {e}")
 
 

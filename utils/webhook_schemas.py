@@ -1,10 +1,9 @@
-from typing import Optional, List
 from pydantic import BaseModel, Field, HttpUrl, field_validator
 
 
 class Account(BaseModel):
     name: str
-    email: Optional[str] = None
+    email: str | None = None
 
 
 class Commit(BaseModel):
@@ -29,7 +28,7 @@ class Repository(BaseModel):
     private: bool
     html_url: HttpUrl
     owner: User
-    homepage: Optional[str] = None
+    homepage: str | None = None
 
     @field_validator("homepage", mode="before")
     @classmethod
@@ -84,21 +83,21 @@ class PushSchema(BaseModel):
     deleted: bool
     forced: bool
     compare: HttpUrl
-    commits: List[Commit] = []
-    head_commit: Optional[Commit] = None
+    commits: list[Commit] = []
+    head_commit: Commit | None = None
 
 
 class Branch(BaseModel):
-    label: Optional[str] = None
-    ref: Optional[str] = None
-    sha: Optional[str] = None
-    user: Optional[User] = None
-    repo: Optional[Repository] = None
+    label: str | None = None
+    ref: str | None = None
+    sha: str | None = None
+    user: User | None = None
+    repo: Repository | None = None
 
 
 class PullRequest(BaseModel):
     html_url: HttpUrl
-    issue_url: Optional[str] = None
+    issue_url: str | None = None
 
     @field_validator("issue_url", mode="before")
     @classmethod
@@ -111,16 +110,16 @@ class PullRequest(BaseModel):
     state: str
     title: str
     user: User
-    body: Optional[str] = None
+    body: str | None = None
     created_at: str
     updated_at: str
-    closed_at: Optional[str] = None
-    merged_at: Optional[str] = None
-    merge_commit_sha: Optional[str] = None
-    commits: Optional[int] = 0
-    additions: Optional[int] = 0
-    deletions: Optional[int] = 0
-    changed_files: Optional[int] = 0
+    closed_at: str | None = None
+    merged_at: str | None = None
+    merge_commit_sha: str | None = None
+    commits: int | None = 0
+    additions: int | None = 0
+    deletions: int | None = 0
+    changed_files: int | None = 0
     head: Branch
     base: Branch
 
@@ -139,13 +138,13 @@ class Release(BaseModel):
     id: int
     author: User
     tag_name: str
-    name: Optional[str] = None
+    name: str | None = None
     draft: bool
     prerelease: bool
     created_at: str
     updated_at: str
-    published_at: Optional[str] = None
-    body: Optional[str] = None
+    published_at: str | None = None
+    body: str | None = None
 
 
 class ReleaseSchema(BaseModel):
@@ -159,38 +158,38 @@ class HeadCommit(BaseModel):
     id: str
     message: str
     timestamp: str
-    author: Optional[Account] = None
-    committer: Optional[Account] = None
+    author: Account | None = None
+    committer: Account | None = None
 
 
 class WorkflowRun(BaseModel):
     id: int
     name: str
-    head_branch: Optional[str] = None
-    head_sha: Optional[str] = None
-    path: Optional[str] = None
-    display_title: Optional[str] = None
+    head_branch: str | None = None
+    head_sha: str | None = None
+    path: str | None = None
+    display_title: str | None = None
     run_number: int
     event: str
     status: str
-    conclusion: Optional[str] = None
+    conclusion: str | None = None
     html_url: HttpUrl
     created_at: str
     updated_at: str
-    triggering_actor: Optional[User] = None
-    head_commit: Optional[HeadCommit] = None
-    actor: Optional[User] = None
+    triggering_actor: User | None = None
+    head_commit: HeadCommit | None = None
+    actor: User | None = None
 
 
 class Workflow(BaseModel):
     id: int
     name: str
-    state: Optional[str] = None
+    state: str | None = None
 
 
 class WorkflowSchema(BaseModel):
     action: str
     workflow_run: WorkflowRun
-    workflow: Optional[Workflow] = None
+    workflow: Workflow | None = None
     repository: Repository
     sender: User

@@ -1,22 +1,24 @@
 import asyncio
 import json
 import logging
+import time
 from datetime import datetime
+
 import aiohttp
 import discord
 from mcp import ClientSession
 from mcp.client.sse import sse_client
 from openai import AsyncOpenAI
+
 from config.settings import settings
 from db.repository import (
-    get_or_create_conversation,
-    get_conversation_context,
-    save_message,
-    log_token_usage,
-    count_token,
     MessageRole,
+    count_token,
+    get_conversation_context,
+    get_or_create_conversation,
+    log_token_usage,
+    save_message,
 )
-import time
 
 logger = logging.getLogger("mcp_client")
 
@@ -139,7 +141,7 @@ async def get_tools_from_mcp_server() -> list:
     last_exc = None
     for url in candidates:
         try:
-            async with sse_client(url) as (read_stream, write_stream):
+            async with sse_client(url) as (read_stream, write_stream):  # noqa: SIM117
                 async with ClientSession(read_stream, write_stream) as session:
                     await session.initialize()
                     tools_response = await session.list_tools()
@@ -162,7 +164,7 @@ async def get_tools_from_mcp_server() -> list:
                             if isinstance(raw_schema, str):
                                 try:
                                     parameters = json.loads(raw_schema)
-                                except Exception:
+                                except Exception:  # noqa: BLE001
                                     parameters = None
                             elif isinstance(raw_schema, dict):
                                 parameters = raw_schema
@@ -187,7 +189,7 @@ async def get_tools_from_mcp_server() -> list:
                             )
 
                     return llm_tools
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             last_exc = e
             continue
 
@@ -202,7 +204,7 @@ async def execute_mcp_tool(tool_name: str, arguments: dict) -> str:
     candidates = [MCP_SERVER_URL.rstrip("/") + "/sse"]
     for url in candidates:
         try:
-            async with sse_client(url) as (read_stream, write_stream):
+            async with sse_client(url) as (read_stream, write_stream):  # noqa: SIM117
                 async with ClientSession(read_stream, write_stream) as session:
                     await session.initialize()
                     result = await session.call_tool(tool_name, arguments)
@@ -217,8 +219,8 @@ async def execute_mcp_tool(tool_name: str, arguments: dict) -> str:
                         return combined
                     else:
                         return str(result)
-        except Exception as e:
-            error_msg = f"Error calling MCP tool '{tool_name}' at {url}: {str(e)}"
+        except Exception as e:  # noqa: BLE001
+            error_msg = f"Error calling MCP tool '{tool_name}' at {url}: {e!s}"
             logger.error(error_msg)
             continue
 
@@ -243,7 +245,7 @@ async def check_services_health():
                             False,
                             f"**llama-server** responded with an error ({response.status}).",
                         )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 logger.warning("llama-server health check failed: %s", e)
                 return (
                     False,
@@ -261,7 +263,7 @@ async def check_services_health():
                     ) as response:
                         if response.status in (200, 400, 405):
                             mcp_ok = True
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001
                     logger.debug("MCP SSE health check failed: %s", e)
 
                 # 2. Try root endpoint if /sse was not reached
@@ -278,7 +280,7 @@ async def check_services_health():
                         False,
                         f"**MCP Server** responded with an error ({response.status}).",
                     )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 logger.warning("MCP server health check failed: %s", e)
                 return (
                     False,
@@ -287,7 +289,7 @@ async def check_services_health():
 
     except Exception as e:
         logger.exception("Unexpected error while checking service health")
-        return False, f"An error occurred while checking servers: {str(e)}"
+        return False, f"An error occurred while checking servers: {e!s}"
 
     return True, "All systems go"
 
@@ -313,7 +315,7 @@ async def process_with_mcp_tools(
     )
     conv = await get_or_create_conversation(user_id, channel_id)
 
-    summary, recent_messages, history_tokens = await get_conversation_context(user_id)
+    summary, recent_messages, _history_tokens = await get_conversation_context(user_id)
 
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -329,7 +331,7 @@ async def process_with_mcp_tools(
 
     messages.extend(recent_messages)
 
-    current_time_str = datetime.now().strftime("%A, %d %B %Y - %H:%M WIB")
+    current_time_str = datetime.now().strftime("%A, %d %B %Y - %H:%M WIB")  # noqa: DTZ005
 
     # Extract Channel & Voice Channel info from ctx_obj
     channel_name = "Unknown"
@@ -368,9 +370,8 @@ async def process_with_mcp_tools(
     total_completion_tokens = 0
 
     guild_id = None
-    if ctx_obj:
-        if hasattr(ctx_obj, "guild") and ctx_obj.guild:
-            guild_id = ctx_obj.guild.id
+    if ctx_obj and hasattr(ctx_obj, "guild") and ctx_obj.guild:
+        guild_id = ctx_obj.guild.id
 
     for iteration in range(max_iterations):
         all_tools = []
@@ -447,10 +448,9 @@ async def process_with_mcp_tools(
                                 result = await handler(arguments)
                         else:
                             result = await execute_mcp_tool(tool_name, arguments)
-                    except Exception as tool_exec_err:
-                        logger.error(
-                            f"Unhandled exception executing tool '{tool_name}': {tool_exec_err}",
-                            exc_info=True,
+                    except Exception:
+                        logger.exception(
+                            "Unhandled exception executing tool '%s'", tool_name
                         )
                         result = f"Gagal mengeksekusi fungsi '{tool_name}' karena kendala internal. Harap beri tahu pengguna untuk mencoba sesaat lagi."
 
@@ -551,11 +551,8 @@ async def process_with_mcp_tools(
                 }
                 return reply, used_tools, usage_data, elapsed_s
 
-        except Exception as e:
-            logger.error(
-                f"Unexpected error in process_with_mcp_tools: {e}",
-                exc_info=True,
-            )
+        except Exception:
+            logger.exception("Unexpected error in process_with_mcp_tools")
             elapsed_s = time.perf_counter() - start_time
             return (
                 "Maaf, Nexo mengalami kendala teknis saat memproses permintaanmu. Silakan coba sesaat lagi ya! 🤖",

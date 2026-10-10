@@ -1,6 +1,8 @@
 from unittest.mock import MagicMock
+
 import discord
-from utils.auth_helper import get_member_from_context, has_role, has_permission
+
+from utils.auth_helper import get_member_from_context, has_permission, has_role
 
 
 class DummyRole:

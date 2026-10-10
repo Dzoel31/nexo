@@ -1,13 +1,15 @@
-import pytest
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
-from datetime import datetime, timezone
+
 import discord
+import pytest
+
+from cogs.server_events import ServerEvents
 from utils.schemas import (
     EndDiscordEventSchema,
     ListDiscordEventsSchema,
     get_clean_schema,
 )
-from cogs.server_events import ServerEvents
 
 
 class MockPermissions:
@@ -93,13 +95,13 @@ async def test_list_events_handler_formatted():
     ev1.id = 111222333
     ev1.name = "Workshop IoT ESP32"
     ev1.status = discord.EventStatus.active
-    ev1.start_time = datetime(2026, 9, 2, 12, 30, tzinfo=timezone.utc)
+    ev1.start_time = datetime(2026, 9, 2, 12, 30, tzinfo=UTC)
 
     ev2 = MagicMock()
     ev2.id = 444555666
     ev2.name = "Diskusi AI Agent"
     ev2.status = discord.EventStatus.scheduled
-    ev2.start_time = datetime(2026, 9, 3, 14, 0, tzinfo=timezone.utc)
+    ev2.start_time = datetime(2026, 9, 3, 14, 0, tzinfo=UTC)
 
     guild.fetch_scheduled_events = AsyncMock(return_value=[ev1, ev2])
     bot.guilds = [guild]

@@ -1,14 +1,15 @@
 import json
 from pathlib import Path
+
 from jinja2 import Environment, FileSystemLoader
+
+from utils.gateway_server import compact_markdown, should_send_event
 from utils.webhook_schemas import (
-    PushSchema,
     PullRequestSchema,
+    PushSchema,
     ReleaseSchema,
     WorkflowSchema,
 )
-
-from utils.gateway_server import compact_markdown, should_send_event
 
 env = Environment(loader=FileSystemLoader("templates"), autoescape=False)
 env.filters["compact_markdown"] = compact_markdown

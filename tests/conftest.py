@@ -1,7 +1,9 @@
-import socket
 import asyncio
+import socket
 from urllib.parse import urlparse
+
 import pytest
+
 from db.session import DATABASE_URL, engine
 
 

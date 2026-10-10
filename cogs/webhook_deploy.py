@@ -2,10 +2,12 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import Any, List
+from typing import Any
+
 import aiohttp
 import discord
 from discord.ext import commands
+
 from config.settings import settings
 
 logger = logging.getLogger("cogs.webhook_deploy")
@@ -47,7 +49,7 @@ def build_portainer_webhooks() -> dict[str, str]:
                                 url_clean = str(p_url).strip()
                                 portainer_webhooks[repo_key] = url_clean
                                 portainer_webhooks[short_name] = url_clean
-        except Exception as err:
+        except Exception as err:  # noqa: BLE001
             logger.warning(
                 f"Could not read deploy config from config/projects.json: {err}"
             )
@@ -62,7 +64,7 @@ def truncate_output(text: str, limit: int = 1800) -> str:
 
 
 def build_discord_view_from_components(
-    components_data: List[dict[str, Any]],
+    components_data: list[dict[str, Any]],
 ) -> discord.ui.View | None:
     """Constructs a discord.ui.View with Link Buttons from JSON component definitions."""
     if not components_data:
@@ -106,7 +108,7 @@ class WebhookDeployCog(commands.Cog):
                     try:
                         embed = discord.Embed.from_dict(emb)
                         discord_embeds.append(embed)
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001
                         logger.error(f"Failed to parse embed dict: {e}")
 
                 if view:
@@ -122,9 +124,9 @@ class WebhookDeployCog(commands.Cog):
                 )
 
         webhook_url = settings.WEBHOOK_DEVLOGS_CHANNEL
-        if webhook_url.startswith("http://") or webhook_url.startswith("https://"):
+        if webhook_url.startswith(("http://", "https://")):
             try:
-                async with aiohttp.ClientSession() as session:
+                async with aiohttp.ClientSession() as session:  # noqa: SIM117
                     async with session.post(
                         webhook_url, json=payload, timeout=10
                     ) as resp:
@@ -132,7 +134,7 @@ class WebhookDeployCog(commands.Cog):
                             logger.warning(
                                 f"Webhook URL returned non-200 status: {resp.status}"
                             )
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 logger.error(f"Failed to post to Webhook URL: {e}")
             return
 
@@ -152,7 +154,7 @@ class WebhookDeployCog(commands.Cog):
                     try:
                         embed = discord.Embed.from_dict(emb)
                         discord_embeds.append(embed)
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001
                         logger.error(f"Failed to parse embed dict: {e}")
 
                 if view:
@@ -190,7 +192,7 @@ class WebhookDeployCog(commands.Cog):
             await asyncio.sleep(2)
 
         try:
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession() as session:  # noqa: SIM117
                 async with session.post(webhook_url, timeout=30) as resp:
                     if resp.status in (200, 204):
                         logger.info(
@@ -227,7 +229,7 @@ class WebhookDeployCog(commands.Cog):
                         raise RuntimeError(
                             f"Portainer webhook returned status {resp.status}: {text_resp}"
                         )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             err_msg = truncate_output(str(e))
             logger.error(f"Portainer webhook trigger failed: {err_msg}")
             fail_payload = {

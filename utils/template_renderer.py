@@ -1,6 +1,7 @@
-from pathlib import Path
-import jinja2
 import logging
+from pathlib import Path
+
+import jinja2
 
 logger = logging.getLogger("nexo.templates")
 

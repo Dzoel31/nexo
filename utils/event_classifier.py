@@ -1,15 +1,15 @@
-import asyncio
 import json
 import logging
 import re
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Literal
+
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
+from config.settings import settings
 from db.models import ScheduledEvent
 from db.session import async_session
-from config.settings import settings
 
 logger = logging.getLogger("event_classifier")
 
@@ -134,8 +134,8 @@ class EventClassifier:
     async def classify_event(
         self,
         summary: str,
-        description: Optional[str] = None,
-        gcal_id: Optional[str] = None,
+        description: str | None = None,
+        gcal_id: str | None = None,
     ) -> EventClassificationResult:
         """
         Main classification pipeline for calendar agendas.
@@ -162,7 +162,7 @@ class EventClassifier:
                             confidence=1.0,
                             source="db_cache",
                         )
-            except Exception as db_err:
+            except Exception as db_err:  # noqa: BLE001
                 logger.warning(
                     f"[Classifier:CacheError] Gagal membaca DB cache untuk gcal_id={gcal_id}: {db_err}"
                 )
@@ -185,7 +185,7 @@ class EventClassifier:
         )
         return await self._classify_via_slm(summary, description)
 
-    def _match_fast_path(self, summary: str) -> Optional[EventClassificationResult]:
+    def _match_fast_path(self, summary: str) -> EventClassificationResult | None:
         """Matches summary string against fast-path prefix regex patterns."""
         cleaned_text = re.sub(r"[\[\]\(\)\{\}:_-]", " ", summary).strip()
 
@@ -200,7 +200,7 @@ class EventClassifier:
         return None
 
     async def _classify_via_slm(
-        self, summary: str, description: Optional[str] = None
+        self, summary: str, description: str | None = None
     ) -> EventClassificationResult:
         """
         Sends an isolated 1-shot structured classification request to llama-server.
@@ -226,7 +226,7 @@ class EventClassifier:
         if description and description.strip():
             user_content += f"\nDeskripsi: {description[:200]}"
 
-        payload: Dict[str, Any] = {
+        payload: dict[str, Any] = {
             "model": LLM_MODEL_NAME,
             "messages": [
                 {"role": "system", "content": system_prompt},
@@ -291,12 +291,12 @@ class EventClassifier:
                 confidence=0.85,
                 source="slm_fallback",
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             logger.warning(
                 f"[Classifier:Timeout] Inferensi LLM melebihi 120s untuk '{summary}'. Menggunakan fallback."
             )
             return self._safe_fallback(summary)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.warning(
                 f"[Classifier:Exception] Gagal memproses SLM classification untuk '{summary}': {e}"
             )

@@ -1,20 +1,21 @@
-import json
+import asyncio
 import html
+import json
 import logging
 import re
 from pathlib import Path
-from typing import Any, Optional
-import asyncio
-import uvicorn
-from fastapi import FastAPI, Request, HTTPException, Header
-from jinja2 import Environment, FileSystemLoader
-from discord.ext import commands
-from config.settings import settings
+from typing import Any
 
+import uvicorn
+from discord.ext import commands
+from fastapi import FastAPI, Header, HTTPException, Request
+from jinja2 import Environment, FileSystemLoader
+
+from config.settings import settings
 from utils.verify import verify_signature
 from utils.webhook_schemas import (
-    PushSchema,
     PullRequestSchema,
+    PushSchema,
     ReleaseSchema,
     WorkflowSchema,
 )
@@ -120,7 +121,7 @@ def save_webhook_payload(event: str, payload: Any, delivery: str = "") -> Path:
                 existing = json.load(f)
                 if not isinstance(existing, list):
                     existing = [existing]
-        except Exception:
+        except Exception:  # noqa: BLE001
             existing = []
 
     existing.append(payload)
@@ -135,7 +136,7 @@ def load_projects_config() -> dict[str, Any]:
         try:
             with open(PROJECTS_CONFIG_PATH, "r", encoding="utf-8") as f:
                 return json.load(f)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Failed to load projects.json: {e}")
     return {}
 
@@ -184,9 +185,9 @@ async def health_check():
 @app.post("/nexo/webhook")
 async def webhook_handler(
     request: Request,
-    x_github_event: Optional[str] = Header(None, alias="X-GitHub-Event"),
-    x_github_delivery: Optional[str] = Header(None, alias="X-GitHub-Delivery"),
-    x_hub_signature_256: Optional[str] = Header(None, alias="X-Hub-Signature-256"),
+    x_github_event: str | None = Header(None, alias="X-GitHub-Event"),
+    x_github_delivery: str | None = Header(None, alias="X-GitHub-Delivery"),
+    x_hub_signature_256: str | None = Header(None, alias="X-Hub-Signature-256"),
 ):
     event = x_github_event or "unknown"
     delivery = x_github_delivery or "unknown"
@@ -274,7 +275,7 @@ async def webhook_handler(
     for item in payload_items:
         try:
             model = schema_cls(**item)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Failed to validate payload for event '{event}': {e}")
             raise HTTPException(status_code=500, detail="Payload validation failed.")
 
@@ -343,7 +344,7 @@ async def webhook_handler(
 
         try:
             template = env_template.get_template(template_name)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Template '{template_name}' not found: {e}")
             raise HTTPException(
                 status_code=500, detail=f"Template {template_name} not found."
@@ -352,7 +353,7 @@ async def webhook_handler(
         try:
             rendered_content = template.render(data=model, config=repo_config)
             message_payload = json.loads(rendered_content)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Template rendering failed for '{template_name}': {e}")
             raise HTTPException(status_code=500, detail="Template rendering failed.")
 

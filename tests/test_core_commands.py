@@ -1,5 +1,8 @@
+from datetime import UTC
 from unittest.mock import AsyncMock, MagicMock
+
 import pytest
+
 from cogs.core_commands import CoreCommands
 
 
@@ -39,7 +42,7 @@ async def test_say_command_unauthorized():
 
     await cog.say.callback(cog, ctx, text="to #general Halo guys")
     ctx.send.assert_awaited_once()
-    args, kwargs = ctx.send.call_args
+    args, _kwargs = ctx.send.call_args
     assert "Akses Ditolak" in args[0]
 
 
@@ -135,7 +138,8 @@ async def test_say_command_embed_mode():
 
 
 def test_parse_scheduled_time_flags():
-    from datetime import datetime, timezone
+    from datetime import datetime
+
     from cogs.core_commands import parse_scheduled_time
 
     # Test --time flag
@@ -150,7 +154,7 @@ def test_parse_scheduled_time_flags():
     assert cleaned == "Halo semua"
 
     # Test --in flag (e.g. 30m, 2h, 1d)
-    now_utc = datetime.now(timezone.utc)
+    now_utc = datetime.now(UTC)
     sched_dt_in, cleaned_in = parse_scheduled_time("Pengingat rapat --in 2h")
     assert sched_dt_in is not None
     diff = (sched_dt_in - now_utc).total_seconds()
@@ -195,7 +199,7 @@ async def test_say_command_schedule_in(monkeypatch):
 @pytest.mark.asyncio
 async def test_say_command_list_and_cancel(monkeypatch):
     import uuid
-    from datetime import datetime, timezone
+    from datetime import datetime
     from unittest.mock import AsyncMock, patch
 
     bot = create_mock_bot()
@@ -207,7 +211,7 @@ async def test_say_command_list_and_cancel(monkeypatch):
     mock_item.id = test_id
     mock_item.channel_id = 123456
     mock_item.content = "Pengumuman terjadwal nomor satu"
-    mock_item.scheduled_at = datetime.now(timezone.utc)
+    mock_item.scheduled_at = datetime.now(UTC)
     mock_item.is_embed = False
 
     target_channel = MagicMock()

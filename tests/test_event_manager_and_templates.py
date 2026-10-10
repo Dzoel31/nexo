@@ -1,4 +1,5 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
+
 from utils.event_manager import (
     format_indonesian_date,
     format_time_wib,
@@ -11,7 +12,7 @@ from utils.template_renderer import render_event_template
 
 def test_timezone_wib_conversion():
     # 06:00 UTC must be converted to 13:00 WIB
-    dt_utc = datetime(2026, 9, 1, 6, 0, tzinfo=timezone.utc)
+    dt_utc = datetime(2026, 9, 1, 6, 0, tzinfo=UTC)
     assert format_time_wib(dt_utc) == "13:00"
     assert "Selasa, 01 September 2026" in format_indonesian_date(dt_utc)
 
@@ -23,7 +24,7 @@ def test_timezone_wib_conversion():
 
 
 def test_reminder_interval_pruning():
-    now = datetime(2026, 9, 1, 10, 0, tzinfo=timezone.utc)
+    now = datetime(2026, 9, 1, 10, 0, tzinfo=UTC)
     # Event starting in 2 hours (120 minutes)
     start = now + timedelta(hours=2)
 
@@ -80,10 +81,11 @@ def test_template_rendering():
 
 def test_webhook_release_template_json_rendering():
     import json
+
     from jinja2 import Environment, FileSystemLoader
-    from utils.webhook_schemas import ReleaseSchema
 
     from utils.gateway_server import compact_markdown
+    from utils.webhook_schemas import ReleaseSchema
 
     env = Environment(loader=FileSystemLoader("templates"), autoescape=False)
     env.filters["compact_markdown"] = compact_markdown

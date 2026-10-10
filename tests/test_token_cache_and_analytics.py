@@ -1,6 +1,8 @@
 import asyncio
+
 import pytest
 from sqlalchemy import text
+
 from db.repository import (
     count_token,
     get_guild_token_leaderboard,

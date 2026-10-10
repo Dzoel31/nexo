@@ -1,7 +1,8 @@
-from datetime import datetime, timedelta
-from typing import Any, List, Optional
-from pydantic import BaseModel, Field, field_validator, model_validator
 import re
+from datetime import datetime, timedelta
+from typing import Any
+
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 def get_clean_schema(model: type[BaseModel]) -> dict[str, Any]:
@@ -22,23 +23,23 @@ class DiscordEventSchema(BaseModel):
     )
     start_date: str = Field(..., description="Start date (YYYY-MM-DD)")
     start_time: str = Field(..., description="Start time 24h (HH:MM:SS)")
-    end_date: Optional[str] = Field(
+    end_date: str | None = Field(
         default=None,
         description="End date (YYYY-MM-DD). Optional.",
     )
-    end_time: Optional[str] = Field(
+    end_time: str | None = Field(
         default=None,
         description="End time 24h (HH:MM:SS). Optional.",
     )
     location: str = Field(..., description="Voice channel name, link, or location")
-    target_role: Optional[str] = Field(
+    target_role: str | None = Field(
         default=None,
         description="Target mention if requested (e.g. '@everyone', role name). Optional.",
     )
 
     @field_validator("start_time", "end_time", mode="before")
     @classmethod
-    def clean_time_string(cls, v: Optional[str]) -> Optional[str]:
+    def clean_time_string(cls, v: str | None) -> str | None:
         if not v:
             return v
         match = re.search(r"\b(\d{1,2}:\d{2}(?::\d{2})?)\b", str(v))
@@ -48,7 +49,7 @@ class DiscordEventSchema(BaseModel):
         return v
 
     @model_validator(mode="after")
-    def populate_default_end_time(self) -> "DiscordEventSchema":
+    def populate_default_end_time(self) -> DiscordEventSchema:
         """Otomatis isi end_date & end_time (+2 jam) jika tidak disertakan di prompt."""
         if not self.end_time or not self.end_date:
             try:
@@ -60,24 +61,24 @@ class DiscordEventSchema(BaseModel):
                     self.end_date = end_dt.strftime("%Y-%m-%d")
                 if not self.end_time:
                     self.end_time = end_dt.strftime("%H:%M:%S")
-            except Exception:
+            except Exception:  # noqa: S110, BLE001
                 pass
         return self
 
 
 class ListDiscordEventsSchema(BaseModel):
-    status_filter: Optional[str] = Field(
+    status_filter: str | None = Field(
         default="all",
         description="Filter events: 'active', 'scheduled', or 'all'",
     )
 
 
 class EndDiscordEventSchema(BaseModel):
-    event_name: Optional[str] = Field(
+    event_name: str | None = Field(
         default=None,
         description="Event name or keyword to search and end (e.g. 'Diskusi Mingguan')",
     )
-    event_id: Optional[int] = Field(
+    event_id: int | None = Field(
         default=None,
         description="Specific Discord Scheduled Event snowflake ID to end",
     )
@@ -90,13 +91,13 @@ class DiscordThreadSchema(BaseModel):
 
 class DiscordPollSchema(BaseModel):
     question: str = Field(..., description="Poll question")
-    options: List[str] = Field(..., description="Poll choices (max 10 items)")
+    options: list[str] = Field(..., description="Poll choices (max 10 items)")
     allow_multiselect: bool = Field(default=False, description="Allow multiple choices")
     duration_hours: int = Field(default=24, description="Duration in hours (1-168)")
 
 
 class EndDiscordPollSchema(BaseModel):
-    message_id: Optional[int] = Field(
+    message_id: int | None = Field(
         default=None,
         description="Target poll message ID (omit to auto-find in current channel)",
     )
@@ -120,7 +121,7 @@ class ClearMessagesSchema(BaseModel):
 
 
 class CheckVoiceChannelSchema(BaseModel):
-    channel_name: Optional[str] = Field(
+    channel_name: str | None = Field(
         default=None,
         description="Voice channel name (omit for current/active user channel)",
     )

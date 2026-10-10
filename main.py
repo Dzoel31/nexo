@@ -1,8 +1,10 @@
 import asyncio
 import inspect
 import logging
+
 import discord
 from discord.ext import commands
+
 from config.settings import settings
 from utils.mcp_client import check_services_health
 
@@ -61,7 +63,7 @@ async def on_ready():
     try:
         synced = await bot.tree.sync()
         logger.info(f"Synced {len(synced)} application slash commands globally.")
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.error(f"Failed to sync slash commands: {e}")
 
     logger.info("------")
@@ -95,7 +97,7 @@ async def main():
             try:
                 await bot.load_extension(cog)
                 logger.info(f"Loaded {cog} successfully")
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 logger.error(f"Failed to load cog {cog}: {e}")
 
         # Launch FastAPI Webhook Gateway Server in background task
@@ -111,7 +113,7 @@ async def main():
                     res = cog.cog_unload()
                     if inspect.isawaitable(res):
                         await res
-                except Exception:
+                except Exception:  # noqa: S110, BLE001
                     pass
         if not bot.is_closed():
             await bot.close()

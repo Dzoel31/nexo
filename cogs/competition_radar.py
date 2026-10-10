@@ -1,9 +1,11 @@
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
+
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
+
 from db.repository import (
     create_competition,
     delete_competition,
@@ -44,12 +46,12 @@ def parse_deadline_wib(deadline_str: str) -> datetime | None:
     )
     for fmt in formats:
         try:
-            dt = datetime.strptime(deadline_str.strip(), fmt)
+            dt = datetime.strptime(deadline_str.strip(), fmt)  # noqa: DTZ007
             if fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y"):
                 # Default end of day: 23:59 WIB
                 dt = dt.replace(hour=23, minute=59, second=59)
             dt_wib = dt.replace(tzinfo=WIB)
-            return dt_wib.astimezone(timezone.utc)
+            return dt_wib.astimezone(UTC)
         except ValueError:
             pass
     return None
@@ -136,7 +138,7 @@ class CompetitionRadar(commands.Cog):
                 ephemeral=True,
             )
 
-        now_utc = datetime.now(timezone.utc)
+        now_utc = datetime.now(UTC)
         if deadline_utc <= now_utc:
             return await interaction.response.send_message(
                 "⚠️ Tanggal deadline harus berada di masa depan!",
@@ -309,7 +311,7 @@ class CompetitionRadar(commands.Cog):
     async def deadline_reminder_loop(self):
         """Background task checking competition deadlines every 30 minutes."""
         try:
-            now_utc = datetime.now(timezone.utc)
+            now_utc = datetime.now(UTC)
             for guild in self.bot.guilds:
                 competitions = await list_active_competitions(guild.id)
                 for comp in competitions:
@@ -388,7 +390,7 @@ class CompetitionRadar(commands.Cog):
                             logger.info(
                                 f"Sent H-{target_milestone} reminder for competition #{comp.id} ({comp.name})"
                             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
             logger.error(f"Error in deadline_reminder_loop: {e}")
 
     @deadline_reminder_loop.before_loop

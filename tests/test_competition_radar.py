@@ -1,7 +1,9 @@
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, MagicMock, patch
+
 import discord
 import pytest
+
 from cogs.competition_radar import CompetitionRadar, CompetitionView, parse_deadline_wib
 
 
@@ -157,7 +159,7 @@ async def test_lomba_add_success():
     mock_comp.id = 1
     mock_comp.name = "Gemastik 2026"
     mock_comp.category = "Gemastik/PKM"
-    mock_comp.deadline = datetime.now(timezone.utc) + timedelta(days=30)
+    mock_comp.deadline = datetime.now(UTC) + timedelta(days=30)
     mock_comp.registration_url = "https://gemastik.kemdikbud.go.id"
     mock_comp.guidebook_url = "https://gemastik.kemdikbud.go.id/panduan.pdf"
     mock_comp.description = "Kompetisi TIK Mahasiswa Nasional"
@@ -208,7 +210,7 @@ async def test_lomba_list():
     mock_comp.id = 5
     mock_comp.name = "Hackathon AI 2026"
     mock_comp.category = "AI"
-    mock_comp.deadline = datetime.now(timezone.utc) + timedelta(days=5)
+    mock_comp.deadline = datetime.now(UTC) + timedelta(days=5)
     mock_comp.registration_url = None
     mock_comp.guidebook_url = None
 
@@ -250,7 +252,7 @@ async def test_lomba_detail():
     mock_comp.id = 10
     mock_comp.name = "IoT Innovation Award"
     mock_comp.category = "IoT"
-    mock_comp.deadline = datetime.now(timezone.utc) + timedelta(days=12)
+    mock_comp.deadline = datetime.now(UTC) + timedelta(days=12)
     mock_comp.description = "Lomba prototipe IoT"
     mock_comp.registration_url = "https://ieee.org/iot"
     mock_comp.guidebook_url = None

@@ -1,22 +1,23 @@
 import asyncio
 import logging
 import re
-from datetime import datetime, timedelta, timezone
-from typing import List, Optional
+from datetime import UTC, datetime, timedelta, timezone
+
 import discord
+
 from config.settings import settings
 
 logger = logging.getLogger("event_manager")
 
 # Reminder Interval Profiles (in minutes)
 # DEADLINE: H-7d (10080), H-3d (4320), H-1d (1440), 12h (720), 1h (60)
-DEADLINE_REMINDER_INTERVALS: List[int] = [10080, 4320, 1440, 720, 60]
+DEADLINE_REMINDER_INTERVALS: list[int] = [10080, 4320, 1440, 720, 60]
 
 # EVENT (Rapat/Acara): H-1d (1440), 1h (60)
-EVENT_REMINDER_INTERVALS: List[int] = [1440, 60]
+EVENT_REMINDER_INTERVALS: list[int] = [1440, 60]
 
 # Master Reminder Intervals for fallback / backward compatibility
-MASTER_REMINDER_INTERVALS: List[int] = [10080, 4320, 1440, 720, 60]
+MASTER_REMINDER_INTERVALS: list[int] = [10080, 4320, 1440, 720, 60]
 
 INDONESIAN_DAYS = {
     0: "Senin",
@@ -49,7 +50,7 @@ WIB_TZ = timezone(timedelta(hours=7))
 def to_wib(dt: datetime) -> datetime:
     """Converts any datetime (naive or tz-aware) to timezone-aware WIB (UTC+7)."""
     if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
+        dt = dt.replace(tzinfo=UTC)
     return dt.astimezone(WIB_TZ)
 
 
@@ -94,7 +95,7 @@ def detect_event_type(summary: str, is_all_day: bool = False) -> str:
     return "EVENT"
 
 
-def get_reminder_intervals_for_type(event_type: str = "EVENT") -> List[int]:
+def get_reminder_intervals_for_type(event_type: str = "EVENT") -> list[int]:
     """Returns the interval profile list for a given event type."""
     if event_type == "DEADLINE":
         return list(DEADLINE_REMINDER_INTERVALS)
@@ -115,24 +116,24 @@ def get_human_time_label(interval_minutes: int) -> str:
 
 def prune_reminder_intervals(
     start_time: datetime,
-    now_dt: Optional[datetime] = None,
+    now_dt: datetime | None = None,
     event_type: str = "EVENT",
-) -> List[int]:
+) -> list[int]:
     """
     Filters reminder intervals based on lead time (start_time - now) and event type.
     Rule: Keep interval X if (start_time - X minutes) > now + 5 minutes.
     Returns: List of valid intervals sorted descending.
     """
     if start_time.tzinfo is None:
-        start_time = start_time.replace(tzinfo=timezone.utc)
+        start_time = start_time.replace(tzinfo=UTC)
 
     if now_dt is None:
-        now_dt = datetime.now(timezone.utc)
+        now_dt = datetime.now(UTC)
     elif now_dt.tzinfo is None:
-        now_dt = now_dt.replace(tzinfo=timezone.utc)
+        now_dt = now_dt.replace(tzinfo=UTC)
 
     cutoff_margin = timedelta(minutes=5)
-    valid_intervals: List[int] = []
+    valid_intervals: list[int] = []
 
     target_intervals = get_reminder_intervals_for_type(event_type)
 
@@ -147,12 +148,12 @@ def prune_reminder_intervals(
 
 def build_reminder_embed(
     event_name: str,
-    description: Optional[str],
+    description: str | None,
     start_dt: datetime,
     location: str,
     interval_minutes: int,
     event_type: str = "EVENT",
-    event_url: Optional[str] = None,
+    event_url: str | None = None,
 ) -> discord.Embed:
     """
     Builds a Discord Embed differentiating visual style and colors
@@ -227,9 +228,9 @@ def build_reminder_embed(
 async def generate_dynamic_event_message(
     event_type: str,
     event_name: str,
-    event_description: Optional[str] = None,
+    event_description: str | None = None,
     fallback_text: str = "",
-    role_mention: Optional[str] = None,
+    role_mention: str | None = None,
     timeout_sec: float = 120.0,
 ) -> str:
     """
@@ -295,7 +296,7 @@ async def generate_dynamic_event_message(
                 generated_text = f"{generated_text}\n\n{role_mention}"
             return generated_text
 
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001
         logger.warning(
             f"Dynamic event message generation failed or timed out ({e}). Using static fallback template."
         )
