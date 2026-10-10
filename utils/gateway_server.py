@@ -1,4 +1,3 @@
-import os
 import json
 import html
 import logging
@@ -10,6 +9,7 @@ import uvicorn
 from fastapi import FastAPI, Request, HTTPException, Header
 from jinja2 import Environment, FileSystemLoader
 from discord.ext import commands
+from config.settings import settings
 
 from utils.verify import verify_signature
 from utils.webhook_schemas import (
@@ -20,6 +20,46 @@ from utils.webhook_schemas import (
 )
 
 logger = logging.getLogger("gateway_server")
+
+UVICORN_LOGGING_CONFIG = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "default": {
+            "format": "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+            "datefmt": "%Y-%m-%d %H:%M:%S",
+        },
+        "access": {
+            "format": "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
+            "datefmt": "%Y-%m-%d %H:%M:%S",
+        },
+    },
+    "handlers": {
+        "default": {
+            "class": "logging.StreamHandler",
+            "formatter": "default",
+            "stream": "ext://sys.stderr",
+        },
+        "access": {
+            "class": "logging.StreamHandler",
+            "formatter": "access",
+            "stream": "ext://sys.stdout",
+        },
+    },
+    "loggers": {
+        "uvicorn": {"handlers": ["default"], "level": "INFO", "propagate": False},
+        "uvicorn.error": {
+            "handlers": ["default"],
+            "level": "INFO",
+            "propagate": False,
+        },
+        "uvicorn.access": {
+            "handlers": ["access"],
+            "level": "INFO",
+            "propagate": False,
+        },
+    },
+}
 app = FastAPI(title="Nexo Webhook Gateway", docs_url="/docs")
 
 # Global reference to discord bot and strong references for background tasks
@@ -321,9 +361,7 @@ async def webhook_handler(
             repo_key = repo_name or repo_full_name
 
             if event == "release":
-                release_channel_id = int(
-                    os.environ.get("WEBHOOK_RELEASE_NOTES_CHANNEL_ID", 0) or 0
-                )
+                release_channel_id = int(settings.WEBHOOK_RELEASE_NOTES_CHANNEL_ID)
                 action = getattr(model, "action", None)
                 if action == "released":
                     dest_channel_id = release_channel_id or target_channel_id
@@ -333,9 +371,7 @@ async def webhook_handler(
                         )
                     )
                 elif action == "prereleased":
-                    devlogs_channel_id = int(
-                        os.environ.get("WEBHOOK_DEVLOGS_CHANNEL_ID", 0) or 0
-                    )
+                    devlogs_channel_id = int(settings.WEBHOOK_DEVLOGS_CHANNEL_ID)
                     dest_channel_id = target_channel_id or devlogs_channel_id
                     if dest_channel_id and dest_channel_id != release_channel_id:
                         launch_background_task(
@@ -376,10 +412,16 @@ async def start_gateway_server(bot: commands.Bot):
     global _bot
     _bot = bot
 
-    host = os.environ.get("HOST", "0.0.0.0")  # nosec B104
-    port = int(os.environ.get("PORT", os.environ.get("WEBHOOK_PORT", 8000)))
+    host = settings.HOST  # nosec B104
+    port = settings.PORT
     config = uvicorn.Config(
-        app=app, host=host, port=port, log_level="info", access_log=False
+        app=app,
+        host=host,
+        port=port,
+        log_level="info",
+        access_log=False,
+        log_config=UVICORN_LOGGING_CONFIG,
+        use_colors=False,
     )
     server = uvicorn.Server(config)
     logger.info(f"Starting FastAPI Webhook Gateway Server on port {port}...")
