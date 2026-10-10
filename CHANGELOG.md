@@ -2,6 +2,28 @@
 
 <!-- version list -->
 
+## v1.16.0 (2026-10-10)
+
+### Bug Fixes
+
+- **config**: Use centralized settings for database session
+  ([`dad50d2`](https://github.com/ksm-aiot-upnvj/nexo/commit/dad50d2af62a26ffb6dd3ba718076b55cc16a362))
+
+- **llm**: Use fallback API key for offline repository imports
+  ([`7777058`](https://github.com/ksm-aiot-upnvj/nexo/commit/77770584df155fc0cc0e7d0ae06f72ac262481b9))
+
+### Features
+
+- **config**: Centralize environment settings
+  ([`43802b3`](https://github.com/ksm-aiot-upnvj/nexo/commit/43802b38964f50f9f3bcfd7ea4c078905875759b))
+
+- **gateway**: Configure uvicorn logging and runtime settings
+  ([`0c92448`](https://github.com/ksm-aiot-upnvj/nexo/commit/0c92448dee1760f27e2fb8e18632cb8b631b8d96))
+
+- **llm**: Migrate token counting to Responses API
+  ([`6027f20`](https://github.com/ksm-aiot-upnvj/nexo/commit/6027f202b8833f2688a2c47941531951f1e1b6ad))
+
+
 ## v1.15.2 (2026-09-28)
 
 ### Bug Fixes
