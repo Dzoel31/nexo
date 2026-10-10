@@ -4,7 +4,6 @@ import hashlib
 import inspect
 import json
 import logging
-import os
 import re
 
 import discord
@@ -40,6 +39,7 @@ from utils.schemas import (
 from utils.template_renderer import render_event_template
 from utils.gcal_manager import create_gcal_event, delete_gcal_event, list_gcal_events
 from utils.auth_helper import has_permission
+from config.settings import settings
 
 logger = logging.getLogger("server_events")
 
@@ -51,12 +51,11 @@ class ServerEvents(commands.Cog):
         self._bot_created_event_ids: set[int] = set()
 
         # Configuration for temporary voice channels
-        self.GENERATOR_CHANNEL_ID = int(
-            os.getenv("GENERATOR_CHANNEL_ID", 1424293013930819694)
-        )
-        self.CATEGORY_ID = int(os.getenv("CATEGORY_ID", 1424293213930819694))
+        self.GENERATOR_CHANNEL_ID = settings.GENERATOR_CHANNEL_ID
+        self.GENERATOR_STAGE_ID = settings.GENERATOR_STAGE_ID
+        self.CATEGORY_ID = settings.CATEGORY_ID
         self.active_temp_channels = set()
-        self.has_vc_scanned = False
+        self.has_vc_stage_scanned = False
 
         # Reminder loop based on Calendar and Discord Events
         self.reminder_loop.start()
@@ -219,7 +218,7 @@ class ServerEvents(commands.Cog):
 
     @commands.Cog.listener()
     async def on_ready(self):
-        if self.has_vc_scanned:
+        if self.has_vc_stage_scanned:
             return
 
         await self.bot.wait_until_ready()
@@ -227,13 +226,16 @@ class ServerEvents(commands.Cog):
         category = self.bot.get_channel(self.CATEGORY_ID)
         if not category or not isinstance(category, discord.CategoryChannel):
             logger.warning("CategoryChannel for Voice channel not found")
-            self.has_vc_scanned = True
+            self.has_vc_stage_scanned = True
             return
 
         logger.info(f"Scanned and cached Category ID: {category.id}")
-        cleaned_count = 0
-        recovered_count = 0
+        cleaned_vc_count = 0
+        recovered_vc_count = 0
+        cleaned_stage_count = 0
+        recovered_stage_count = 0
 
+        # Scan Voice Channels
         for channel in category.voice_channels:
             if channel.id == self.GENERATOR_CHANNEL_ID or not channel.name.startswith(
                 "🔒 "
@@ -243,17 +245,34 @@ class ServerEvents(commands.Cog):
             if len(channel.members) == 0:
                 try:
                     await channel.delete(reason="Cleanup temp channel after restart")
-                    cleaned_count += 1
+                    cleaned_vc_count += 1
                 except discord.HTTPException:
                     pass
 
             else:
                 self.active_temp_channels.add(channel.id)
-                recovered_count += 1
+                recovered_vc_count += 1
 
-        logger.info(f"Cleaned {cleaned_count} empty temp channels")
-        logger.info(f"Recovered {recovered_count} active temp channels")
-        self.has_vc_scanned = True
+        # Scan Stage Channels
+        for stage in category.stage_channels:
+            if stage.id == self.GENERATOR_STAGE_ID or not stage.name.startswith("🎙️ "):
+                continue
+
+            if len(stage.members) == 0:
+                try:
+                    await stage.delete(reason="Cleanup temp stage after restart")
+                    cleaned_stage_count += 1
+                except discord.HTTPException:
+                    pass
+            else:
+                self.active_temp_channels.add(stage.id)  # Atau self.active_temp_stages
+                recovered_stage_count += 1
+
+        logger.info(f"Cleaned {cleaned_vc_count} empty temp channels")
+        logger.info(f"Recovered {recovered_vc_count} active temp channels")
+        logger.info(f"Cleaned {cleaned_stage_count} empty temp stages")
+        logger.info(f"Recovered {recovered_stage_count} active temp stages")
+        self.has_vc_stage_scanned = True
 
     async def create_event_handler(self, arguments: dict, ctx_obj=None) -> str:
         """Function called by the LLM brain when create_discord_event tool is used"""
@@ -347,9 +366,7 @@ class ServerEvents(commands.Cog):
             event_url = f"https://discord.com/events/{guild.id}/{discord_event.id}"
 
             # Determine Announcement / Broadcast Channel
-            announcement_channel_id = int(
-                os.environ.get("ANNOUNCEMENT_CHANNEL_ID", "0")
-            )
+            announcement_channel_id = int(settings.ANNOUNCEMENT_CHANNEL_ID)
             broadcast_channel = None
             if announcement_channel_id:
                 broadcast_channel = self.bot.get_channel(announcement_channel_id)
@@ -640,9 +657,7 @@ class ServerEvents(commands.Cog):
                     await session.commit()
 
             # Send broadcast completed if channel available
-            announcement_channel_id = int(
-                os.environ.get("ANNOUNCEMENT_CHANNEL_ID", "0")
-            )
+            announcement_channel_id = int(settings.ANNOUNCEMENT_CHANNEL_ID)
             broadcast_channel = None
             if announcement_channel_id:
                 broadcast_channel = self.bot.get_channel(announcement_channel_id)
@@ -940,7 +955,7 @@ class ServerEvents(commands.Cog):
     @commands.Cog.listener()
     async def on_member_join(self, member):
         """Send a welcome message when a new member joins"""
-        channel_id = int(os.environ.get("WELCOME_AND_RULES_CHANNEL_ID", 0))
+        channel_id = settings.WELCOME_AND_RULES_CHANNEL_ID
 
         try:
             channel = self.bot.get_channel(channel_id)
@@ -977,7 +992,7 @@ class ServerEvents(commands.Cog):
             return
 
         try:
-            channel_id = int(os.environ.get("WELCOME_AND_RULES_CHANNEL_ID", 0))
+            channel_id = settings.WELCOME_AND_RULES_CHANNEL_ID
         except ValueError:
             logger.error("Invalid channel ID in environment variable.")
             return
@@ -1031,7 +1046,7 @@ class ServerEvents(commands.Cog):
                 )
                 return
 
-            member_role_id = int(os.environ.get("MEMBER_ROLE_ID", 0))
+            member_role_id = settings.MEMBER_ROLE_ID
             role = message.guild.get_role(member_role_id) if member_role_id else None
 
             if not role:
@@ -1312,9 +1327,7 @@ class ServerEvents(commands.Cog):
             return
 
         for guild in self.bot.guilds:
-            announcement_channel_id = int(
-                os.environ.get("ANNOUNCEMENT_CHANNEL_ID", "0")
-            )
+            announcement_channel_id = int(settings.ANNOUNCEMENT_CHANNEL_ID)
             broadcast_channel = (
                 self.bot.get_channel(announcement_channel_id)
                 if announcement_channel_id
@@ -1628,9 +1641,7 @@ class ServerEvents(commands.Cog):
             gcal_id = gcal_data.get("id") if gcal_data else None
 
             # 2. Determine broadcast channel
-            announcement_channel_id = int(
-                os.environ.get("ANNOUNCEMENT_CHANNEL_ID", "0")
-            )
+            announcement_channel_id = int(settings.ANNOUNCEMENT_CHANNEL_ID)
             broadcast_channel = None
             if announcement_channel_id:
                 broadcast_channel = self.bot.get_channel(announcement_channel_id)
@@ -1876,6 +1887,32 @@ class ServerEvents(commands.Cog):
 
             except discord.HTTPException as e:
                 logger.error(f"Failed to create temp channel: {e}")
+                return
+
+        elif after.channel and after.channel.id == self.GENERATOR_STAGE_ID:
+            guild = member.guild
+            category = after.channel.category
+
+            overwrites = category.overwrites.copy() if category else {}
+
+            overwrites[member] = discord.PermissionOverwrite(
+                manage_channels=True,
+                move_members=True,
+                mute_members=True,
+                manage_permissions=True,
+            )
+
+            try:
+                temp_stage = await guild.create_stage_channel(
+                    name=f"🎙 {member.display_name}'s Stage",
+                    category=category,
+                    overwrites=overwrites,
+                )
+                self.active_temp_channels.add(temp_stage.id)
+
+                await member.move_to(temp_stage)
+            except discord.HTTPException as e:
+                logger.error(f"Failed to create temp stage: {e}")
                 return
 
         if before.channel and before.channel.id in self.active_temp_channels:

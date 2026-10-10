@@ -1,10 +1,10 @@
-import os
 import asyncio
 import inspect
 import logging
 import discord
 from discord.ext import commands
-from dotenv import load_dotenv
+from config.settings import settings
+from utils.mcp_client import check_services_health
 
 logging.basicConfig(
     level=logging.INFO,
@@ -13,8 +13,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("main")
 
-load_dotenv()
-TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "")
+TOKEN = settings.DISCORD_BOT_TOKEN
 
 intents = discord.Intents.default()
 intents.message_content = True  # Required to read message content
@@ -48,6 +47,16 @@ async def on_ready():
     )
     logger.info(f"Logged in as {bot.user} (ID: {bot.user.id})")
 
+    if not getattr(bot, "_initial_service_health_checked", False):
+        bot._initial_service_health_checked = True
+        services_available, health_message = await check_services_health()
+        if services_available:
+            logger.info("Initial service health check passed.")
+        else:
+            logger.warning(
+                "Initial service health check: Unavailable - %s", health_message
+            )
+
     # Sync application slash commands to Discord
     try:
         synced = await bot.tree.sync()
@@ -71,8 +80,6 @@ async def main():
     if not TOKEN:
         logger.error("DISCORD_BOT_TOKEN environment variable not set.")
         return
-
-    from db.repository import close_http_session
 
     try:
         # Load all local Cogs
@@ -106,7 +113,6 @@ async def main():
                         await res
                 except Exception:
                     pass
-        await close_http_session()
         if not bot.is_closed():
             await bot.close()
 

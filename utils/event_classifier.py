@@ -1,22 +1,22 @@
 import asyncio
 import json
 import logging
-import os
 import re
 from typing import Any, Dict, Literal, Optional
-import aiohttp
+from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
 from db.models import ScheduledEvent
 from db.session import async_session
+from config.settings import settings
 
 logger = logging.getLogger("event_classifier")
 
-LLAMA_SERVER_URL = os.environ.get(
-    "LLAMA_SERVER_URL", "http://localhost:8080/v1/chat/completions"
-)
-LLAMA_API_KEY = os.environ.get("LLAMA_API_KEY", "").strip("\"' \r\n")
+
+LLM_BASE_URL = settings.LLM_BASE_URL
+LLM_API_KEY = settings.LLM_API_KEY.strip("\"' \r\n")
+LLM_MODEL_NAME = settings.LLM_MODEL_NAME
 
 EventClassificationLabel = Literal[
     "PUBLIC_EVENT",
@@ -120,11 +120,16 @@ class EventClassifier:
 
     def __init__(
         self,
-        llama_url: str = LLAMA_SERVER_URL,
-        api_key: str = LLAMA_API_KEY,
+        llama_url: str = LLM_BASE_URL,
+        api_key: str = LLM_API_KEY,
     ):
         self.llama_url = llama_url
         self.api_key = api_key
+        self.ai_client = AsyncOpenAI(
+            base_url=llama_url,
+            api_key=api_key or "sk-no-key",
+            timeout=120.0,
+        )
 
     async def classify_event(
         self,
@@ -222,6 +227,7 @@ class EventClassifier:
             user_content += f"\nDeskripsi: {description[:200]}"
 
         payload: Dict[str, Any] = {
+            "model": LLM_MODEL_NAME,
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {
@@ -256,59 +262,35 @@ class EventClassifier:
         }
 
         try:
-            # Menggunakan ClientTimeout(total=120.0) sesuai rekomendasi keamanan CPU
-            timeout = aiohttp.ClientTimeout(total=120.0)
-            headers = {"Content-Type": "application/json"}
-            key = (self.api_key or os.environ.get("LLAMA_API_KEY", "")).strip(
-                "\"' \r\n"
+            response = await self.ai_client.chat.completions.create(**payload)
+            content = response.choices[0].message.content or ""
+
+            # Ekstrak JSON block dari content
+            json_str = self._extract_json(content)
+            parsed = json.loads(json_str)
+
+            label_val = str(parsed.get("label", "INTERNAL_MEETING")).upper()
+            if label_val not in [
+                "PUBLIC_EVENT",
+                "INTERNAL_MEETING",
+                "TRAINING_WORKSHOP",
+                "LOGISTICS_OPS",
+                "DEADLINE",
+                "CASUAL_BONDING",
+            ]:
+                label_val = "INTERNAL_MEETING"
+
+            is_discord = bool(parsed.get("is_discord_event", False))
+
+            logger.info(
+                f"[Classifier:SLMSuccess] '{summary}' -> {label_val} (is_discord_event={is_discord})"
             )
-            if key and key != "sk-no-key":
-                headers["Authorization"] = f"Bearer {key}"
-
-            async with aiohttp.ClientSession(timeout=timeout) as session:
-                async with session.post(
-                    self.llama_url, json=payload, headers=headers
-                ) as response:
-                    if response.status != 200:
-                        raw_body = await response.text()
-                        logger.warning(
-                            f"[Classifier:SLMError] llama-server HTTP {response.status}: {raw_body}"
-                        )
-                        return self._safe_fallback(summary)
-
-                    data = await response.json()
-                    content = (
-                        data.get("choices", [{}])[0]
-                        .get("message", {})
-                        .get("content", "")
-                    )
-
-                    # Ekstrak JSON block dari content
-                    json_str = self._extract_json(content)
-                    parsed = json.loads(json_str)
-
-                    label_val = str(parsed.get("label", "INTERNAL_MEETING")).upper()
-                    if label_val not in [
-                        "PUBLIC_EVENT",
-                        "INTERNAL_MEETING",
-                        "TRAINING_WORKSHOP",
-                        "LOGISTICS_OPS",
-                        "DEADLINE",
-                        "CASUAL_BONDING",
-                    ]:
-                        label_val = "INTERNAL_MEETING"
-
-                    is_discord = bool(parsed.get("is_discord_event", False))
-
-                    logger.info(
-                        f"[Classifier:SLMSuccess] '{summary}' -> {label_val} (is_discord_event={is_discord})"
-                    )
-                    return EventClassificationResult(
-                        label=label_val,  # type: ignore
-                        is_discord_event=is_discord,
-                        confidence=0.85,
-                        source="slm_fallback",
-                    )
+            return EventClassificationResult(
+                label=label_val,  # type: ignore
+                is_discord_event=is_discord,
+                confidence=0.85,
+                source="slm_fallback",
+            )
         except asyncio.TimeoutError:
             logger.warning(
                 f"[Classifier:Timeout] Inferensi LLM melebihi 120s untuk '{summary}'. Menggunakan fallback."

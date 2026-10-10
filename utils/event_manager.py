@@ -1,10 +1,10 @@
 import asyncio
 import logging
-import os
 import re
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
 import discord
+from config.settings import settings
 
 logger = logging.getLogger("event_manager")
 
@@ -274,7 +274,7 @@ async def generate_dynamic_event_message(
 
         async def _call_llm():
             response = await ai_client.chat.completions.create(
-                model=os.environ.get("LLM_MODEL_NAME", "gemma-4-e2b"),
+                model=settings.LLM_MODEL_NAME,
                 messages=[
                     {"role": "system", "content": system_instruction},
                     {"role": "user", "content": user_prompt},

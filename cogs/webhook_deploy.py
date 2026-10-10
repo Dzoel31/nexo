@@ -1,12 +1,12 @@
 import asyncio
 import json
 import logging
-import os
 from pathlib import Path
 from typing import Any, List
 import aiohttp
 import discord
 from discord.ext import commands
+from config.settings import settings
 
 logger = logging.getLogger("cogs.webhook_deploy")
 
@@ -16,7 +16,7 @@ def build_portainer_webhooks() -> dict[str, str]:
     portainer_webhooks: dict[str, str] = {}
 
     # 1. Read from environment variable PORTAINER_WEBHOOKS (json format or semicolon separated)
-    raw_env = os.environ.get("PORTAINER_WEBHOOKS", "").strip()
+    raw_env = settings.PORTAINER_WEBHOOKS.strip()
     if raw_env:
         if raw_env.startswith("{"):
             try:
@@ -121,7 +121,7 @@ class WebhookDeployCog(commands.Cog):
                     f"Target channel ID {target_channel_id} not found in bot, fallback to default."
                 )
 
-        webhook_url = os.environ.get("WEBHOOK_DEVLOGS_CHANNEL", "")
+        webhook_url = settings.WEBHOOK_DEVLOGS_CHANNEL
         if webhook_url.startswith("http://") or webhook_url.startswith("https://"):
             try:
                 async with aiohttp.ClientSession() as session:
@@ -137,7 +137,7 @@ class WebhookDeployCog(commands.Cog):
             return
 
         # Fallback to Channel ID
-        channel_id = int(os.environ.get("WEBHOOK_DEVLOGS_CHANNEL_ID", 0) or 0)
+        channel_id = settings.WEBHOOK_DEVLOGS_CHANNEL_ID
         if not channel_id and webhook_url.isdigit():
             channel_id = int(webhook_url)
 
@@ -212,7 +212,7 @@ class WebhookDeployCog(commands.Cog):
                                 target_channel_id=target_channel_id,
                             )
                             devlogs_channel_id = int(
-                                os.environ.get("WEBHOOK_DEVLOGS_CHANNEL_ID", 0) or 0
+                                settings.WEBHOOK_DEVLOGS_CHANNEL_ID
                             )
                             if (
                                 devlogs_channel_id
@@ -240,9 +240,7 @@ class WebhookDeployCog(commands.Cog):
             await self.send_discord_notification(
                 fail_payload, target_channel_id=target_channel_id
             )
-            devlogs_channel_id = int(
-                os.environ.get("WEBHOOK_DEVLOGS_CHANNEL_ID", 0) or 0
-            )
+            devlogs_channel_id = int(settings.WEBHOOK_DEVLOGS_CHANNEL_ID)
             if devlogs_channel_id and devlogs_channel_id != target_channel_id:
                 await self.send_discord_notification(
                     fail_payload, target_channel_id=devlogs_channel_id
@@ -278,9 +276,7 @@ class WebhookDeployCog(commands.Cog):
             await self.send_discord_notification(
                 announcement_payload, target_channel_id=target_channel_id
             )
-            devlogs_channel_id = int(
-                os.environ.get("WEBHOOK_DEVLOGS_CHANNEL_ID", 0) or 0
-            )
+            devlogs_channel_id = int(settings.WEBHOOK_DEVLOGS_CHANNEL_ID)
             if devlogs_channel_id and devlogs_channel_id != target_channel_id:
                 await self.send_discord_notification(
                     announcement_payload,

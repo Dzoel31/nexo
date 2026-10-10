@@ -1,11 +1,11 @@
-import os
 import hmac
 import hashlib
 from fastapi import HTTPException
+from config.settings import settings
 
 
 def verify_signature(payload: bytes, secret_header: str) -> None:
-    github_secret = os.environ.get("GITHUB_SECRET", "").strip()
+    github_secret = settings.GITHUB_SECRET.strip()
     if not github_secret:
         raise HTTPException(
             status_code=500,

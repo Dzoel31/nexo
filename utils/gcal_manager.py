@@ -1,13 +1,11 @@
 import asyncio
 import logging
-import os
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
-from dotenv import load_dotenv
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
-
-load_dotenv()
+from config.settings import settings
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -15,11 +13,9 @@ SCOPES = ["https://www.googleapis.com/auth/calendar"]
 
 
 def _get_service():
-    raw_sa_file = os.environ.get(
-        "GOOGLE_SERVICE_ACCOUNT_FILE", "credentials/service_account.json"
-    )
+    raw_sa_file = settings.GOOGLE_SERVICE_ACCOUNT_FILE
     sa_file = raw_sa_file.strip().strip('"').strip("'") if raw_sa_file else ""
-    raw_cal_id = os.environ.get("GOOGLE_CALENDAR_ID")
+    raw_cal_id = settings.GOOGLE_CALENDAR_ID
     cal_id = raw_cal_id.strip().strip('"').strip("'") if raw_cal_id else ""
 
     # Check relative to working directory, and fallback to /app prefix if in Docker
@@ -38,7 +34,10 @@ def _get_service():
     creds = service_account.Credentials.from_service_account_file(
         sa_file, scopes=SCOPES
     )
-    return build("calendar", "v3", credentials=creds), cal_id
+    return (
+        build("calendar", "v3", credentials=creds, cache_discovery=False),
+        cal_id,
+    )
 
 
 async def create_gcal_event(
