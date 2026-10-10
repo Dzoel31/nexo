@@ -22,6 +22,7 @@ services:
       - GOOGLE_CALENDAR_ID
       - LLM_API_KEY
       - GENERATOR_CHANNEL_ID
+      - GENERATOR_STAGE_ID
       - CATEGORY_ID
       - MEMBER_ROLE_ID
     volumes:
