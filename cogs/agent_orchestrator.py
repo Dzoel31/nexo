@@ -189,16 +189,16 @@ class AgentOrchestrator(commands.Cog):
                             # Live Footer Compaction Update (Opsi B)
                             base_footer = footer_text
 
-                            async def on_compaction_start():
+                            async def on_compaction_start(ctx_obj=ctx_obj):
                                 try:
                                     embed.set_footer(  # noqa: B023
                                         text=f"{base_footer} • 🧠 Merangkum memori..."  # noqa: B023
                                     )
                                     if is_interaction and hasattr(  # noqa: B023
                                         ctx_obj,
-                                        "edit_original_response",  # noqa: B023
+                                        "edit_original_response",
                                     ):
-                                        await ctx_obj.edit_original_response(  # noqa: B023
+                                        await ctx_obj.edit_original_response(
                                             embed=embed  # noqa: B023
                                         )
                                     elif sent_msg and hasattr(sent_msg, "edit"):  # noqa: B023
@@ -208,16 +208,16 @@ class AgentOrchestrator(commands.Cog):
                                         f"Failed to update compaction start footer: {cb_err}"
                                     )
 
-                            async def on_compaction_end():
+                            async def on_compaction_end(ctx_obj=ctx_obj):
                                 try:
                                     embed.set_footer(  # noqa: B023
                                         text=f"{base_footer} • 🧠 Memori terpadatkan"  # noqa: B023
                                     )
                                     if is_interaction and hasattr(  # noqa: B023
                                         ctx_obj,
-                                        "edit_original_response",  # noqa: B023
+                                        "edit_original_response",
                                     ):
-                                        await ctx_obj.edit_original_response(  # noqa: B023
+                                        await ctx_obj.edit_original_response(
                                             embed=embed  # noqa: B023
                                         )
                                     elif sent_msg and hasattr(sent_msg, "edit"):  # noqa: B023
