@@ -83,7 +83,7 @@ async def test_list_events_handler_empty():
     cog.reminder_loop.cancel()
 
     res = await cog.list_events_handler({"status_filter": "all"})
-    assert res == "Tidak ada acara terjadwal di server saat ini."
+    assert res == "There are no scheduled events on the server right now."
 
 
 @pytest.mark.asyncio
@@ -147,7 +147,7 @@ async def test_end_event_handler_by_id():
         mock_session_ctx.return_value.__aenter__.return_value = mock_session
 
         res = await cog.end_event_handler({"event_id": 999888}, ctx_obj=admin_ctx)
-        assert "✅ Acara 'Sesi Sharing Session' berhasil diakhiri" in res
+        assert "✅ Event 'Sesi Sharing Session' was successfully ended" in res
         ev1.end.assert_awaited_once()
 
 
@@ -186,7 +186,7 @@ async def test_end_event_handler_by_name_partial_match():
         res = await cog.end_event_handler(
             {"event_name": "weekly discussion"}, ctx_obj=admin_ctx
         )
-        assert "✅ Acara 'Weekly Discussion KSM AIoT #1' berhasil diakhiri" in res
+        assert "✅ Event 'Weekly Discussion KSM AIoT #1' was successfully ended" in res
         ev1.cancel.assert_awaited_once()
 
 
@@ -203,7 +203,7 @@ async def test_end_event_handler_unauthorized():
 
     res = await cog.end_event_handler({"event_name": "Some Event"}, ctx_obj=unauth_ctx)
     assert (
-        "❌ DITOLAK: Kamu tidak memiliki izin 'Manage Events' atau peran kepengurusan"
+        "❌ DENIED: You do not have the 'Manage Events' permission or an eligible management role"
         in res
     )
 
@@ -225,6 +225,6 @@ async def test_end_event_handler_not_found():
         {"event_name": "Non Existing Event"}, ctx_obj=admin_ctx
     )
     assert (
-        "❌ Tidak ditemukan acara dengan nama/keyword 'Non Existing Event' di server."
+        "❌ No event matching the name or keyword 'Non Existing Event' was found on the server."
         in res
     )

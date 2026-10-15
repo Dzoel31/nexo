@@ -7,14 +7,18 @@ import re
 from datetime import UTC, datetime, timedelta
 
 import discord
-from discord import ui
 from discord.ext import commands, tasks
 from sqlalchemy import select
 from sqlalchemy.orm.attributes import flag_modified
 
+from cogs.event_lifecycle import EventLifecycleMixin
+from cogs.event_tools import register_event_tools
+from cogs.onboarding import IntroModal, IntroView
+from cogs.voice_channels import VoiceChannelMixin
 from config.settings import settings
 from db.models import ScheduledEvent
 from db.session import async_session
+from services.events.scheduling import event_expiry_time, parse_calendar_times
 from utils.auth_helper import has_permission
 from utils.event_classifier import default_event_classifier
 from utils.event_manager import (
@@ -35,250 +39,16 @@ from utils.schemas import (
     DiscordThreadSchema,
     EndDiscordEventSchema,
     EndDiscordPollSchema,
-    GetServerChannelsSchema,
-    GetServerRolesSchema,
     ListDiscordEventsSchema,
-    get_clean_schema,
 )
 from utils.template_renderer import render_event_template
 
 logger = logging.getLogger("server_events")
 
-
-class IntroModal(ui.Modal, title="Perkenalkan Diri Kamu"):
-    nickname = ui.Label(
-        text="Nama Panggilan / Nickname",
-        component=ui.TextInput(placeholder="Contoh: John"),
-    )
-    id_number = ui.Label(
-        text="NIM/NIDN/NIP",
-        component=ui.TextInput(placeholder="Contoh: 1234567890"),
-    )
-    batch = ui.Label(
-        text="Angkatan",
-        component=ui.TextInput(placeholder="Contoh: 2026", min_length=4, max_length=4),
-    )
-    hobby_interest = ui.Label(
-        text="Hobby & Interest",
-        component=ui.TextInput(
-            placeholder="Contoh: Ngoding", style=discord.TextStyle.long
-        ),
-    )
-
-    major_select = ui.Label(
-        text="Pilih Program Studi (Major)",
-        component=ui.Select(
-            placeholder="Pilih jurusan kamu...",
-            options=[
-                discord.SelectOption(label="Informatika (IF)", value="IF"),
-                discord.SelectOption(label="Sistem Informasi (SI)", value="SI"),
-                discord.SelectOption(label="D3 Sistem Informasi (D3SI)", value="D3SI"),
-                discord.SelectOption(label="Data Sains (DS)", value="DS"),
-            ],
-        ),
-    )
-
-    async def notify_pengurus(
-        self,
-        guild: discord.Guild,
-        user: discord.Member,
-        nickname: str,
-        id_type: str,
-        id_number: str,
-        major: str,
-        batch: str,
-        intro_message: discord.Message | None,
-    ) -> bool:
-        channel = guild.get_channel(settings.PENGURUS_CHANNEL_ID)
-        if channel is None:
-            logger.error(
-                "PENGURUS_CHANNEL_ID tidak valid atau channel tidak ditemukan."
-            )
-            return False
-
-        embed = discord.Embed(
-            title="Verifikasi Dosen Diperlukan",
-            description=f"{user.mention} mengisi form perkenalan sebagai dosen.",
-            color=discord.Color.orange(),
-        )
-        embed.add_field(name="Nickname", value=nickname, inline=True)
-        embed.add_field(name=id_type, value=id_number, inline=True)
-        embed.add_field(name="Major", value=major, inline=True)
-        embed.add_field(name="Batch", value=batch, inline=True)
-        embed.add_field(name="User ID", value=str(user.id), inline=True)
-        if intro_message:
-            embed.add_field(
-                name="Pesan intro",
-                value=f"[Lihat]({intro_message.jump_url})",
-                inline=False,
-            )
-        embed.set_footer(text="Nexo Bot - KSM AIoT")
-
-        content = None
-        mentions = discord.AllowedMentions.none()
-        if settings.PENGURUS_ROLE_ID:
-            content = f"<@&{settings.PENGURUS_ROLE_ID}>"
-            mentions = discord.AllowedMentions(
-                roles=[discord.Object(id=settings.PENGURUS_ROLE_ID)]
-            )
-
-        try:
-            await channel.send(content=content, embed=embed, allowed_mentions=mentions)
-            return True
-        except discord.HTTPException as e:  # termasuk Forbidden
-            logger.error(f"Gagal kirim notifikasi ke pengurus: {e}")
-            return False
-
-    async def on_submit(self, interaction: discord.Interaction):
-        await interaction.response.defer(ephemeral=True)
-
-        guild = interaction.guild
-        user = interaction.user
-        if guild is None:
-            await interaction.followup.send(
-                "⚠️ Form ini hanya bisa digunakan di dalam server.", ephemeral=True
-            )
-            return
-
-        # Ambil nilai input dari form
-        id_number = self.id_number.component.value.strip()
-        nickname = self.nickname.component.value.strip()
-        major = self.major_select.component.values[0]
-        batch = self.batch.component.value.strip()
-        hobby_interest = self.hobby_interest.component.value
-
-        # 1. Parsing identitas: hanya digit 0-9, tanpa pembersihan karakter lain
-        if not re.fullmatch(r"[0-9]+", id_number):
-            await interaction.followup.send(
-                "⚠️ Identitas hanya boleh berisi angka (tanpa spasi, titik, atau tanda hubung).",
-                ephemeral=True,
-            )
-            return
-
-        # Pattern NIM Mahasiswa: 2 digit angkatan + '10' + 3 digit prodi + 3 digit nomor urut
-        nim_match = re.fullmatch(r"([0-9]{2})10([0-9]{3})([0-9]{3})", id_number)
-        is_nip = bool(re.fullmatch(r"[0-9]{18}", id_number))
-        is_nidn = bool(re.fullmatch(r"[0-9]{10}", id_number)) and not nim_match
-
-        if not (nim_match or is_nip or is_nidn):
-            await interaction.followup.send(
-                "⚠️ Format identitas tidak valid. Harap masukkan NIM (10 digit), "
-                "NIDN (10 digit), atau NIP Dosen (18 digit).",
-                ephemeral=True,
-            )
-            return
-
-        # 2. Nickname
-        if nim_match:
-            year_short = nim_match.group(1)
-            seq_num = nim_match.group(3)
-            suffix = f" {major}'{year_short} {seq_num}"
-        else:
-            suffix = " [Dosen]"
-
-        # Potong bagian nama saja supaya suffix/tag tidak ikut terpotong
-        new_nickname = nickname[: 32 - len(suffix)] + suffix
-
-        # Semua akun mendapat role Member; role Dosen diberikan manual oleh admin
-        warnings: list[str] = []
-        role = (
-            guild.get_role(settings.MEMBER_ROLE_ID) if settings.MEMBER_ROLE_ID else None
-        )
-
-        # 3. Assign role
-        if role is None:
-            logger.error("MEMBER_ROLE_ID tidak valid atau role tidak ditemukan.")
-            warnings.append("Role Member tidak ditemukan, hubungi admin.")
-        elif role not in user.roles:
-            try:
-                await user.add_roles(role, reason="KSM AIoT introduction form")
-            except discord.Forbidden:
-                warnings.append("Bot tidak punya izin memberi role, hubungi admin.")
-            except discord.HTTPException as e:
-                logger.error(f"Gagal assign role: {e}")
-                warnings.append("Gagal memberi role, hubungi admin.")
-
-        # 4. Ganti nickname (dipisah supaya kegagalan di sini tidak membatalkan role/intro)
-        if user.nick != new_nickname:
-            try:
-                await user.edit(nick=new_nickname, reason="KSM AIoT introduction form")
-            except discord.Forbidden:
-                warnings.append(
-                    "Nickname tidak bisa diubah otomatis (kemungkinan role kamu di atas bot)."
-                )
-            except discord.HTTPException as e:
-                logger.error(f"Gagal ubah nickname: {e}")
-                warnings.append("Gagal mengubah nickname.")
-
-        # 5. Pesan perkenalan: versi Mahasiswa (dengan NIM) dan Dosen (tanpa ID)
-        if nim_match:
-            formatted_intro = (
-                f"**Nickname:** {nickname}\n"
-                f"**NIM:** {id_number}\n"
-                f"**Major:** {major}\n"
-                f"**Batch:** {batch}\n"
-                f"**Hobby & Interest:** {hobby_interest}"
-            )
-        else:
-            formatted_intro = (
-                f"**Nickname:** {nickname}\n"
-                f"**Major:** {major}\n"
-                f"**Batch:** {batch}\n"
-                f"**Hobby & Interest:** {hobby_interest}"
-            )
-
-        pub_message = None
-        try:
-            pub_message = await interaction.channel.send(
-                content=formatted_intro,
-                allowed_mentions=discord.AllowedMentions.none(),
-            )
-            await pub_message.add_reaction("👋")
-            await pub_message.reply(
-                f"Nice to meet you, {user.mention}! Welcome to KSM AIoT! 🚀",
-                allowed_mentions=discord.AllowedMentions(users=[user]),
-            )
-        except discord.Forbidden:
-            warnings.append("Bot tidak punya izin mengirim pesan di channel ini.")
-        except discord.HTTPException as e:
-            logger.error(f"Gagal kirim intro: {e}")
-            warnings.append("Gagal mengirim perkenalan ke channel.")
-
-        # 6. Balasan privat
-        if warnings:
-            msg = "⚠️ Form diproses, tapi ada kendala:\n- " + "\n- ".join(warnings)
-        else:
-            msg = "Form perkenalan kamu berhasil dikirim!"
-            if not nim_match:
-                msg += "\nRole Dosen akan diberikan admin setelah verifikasi."
-                id_type = "NIP" if is_nip else "NIDN"
-                ok = await self.notify_pengurus(
-                    guild, user, nickname, id_type, id_number, major, batch, pub_message
-                )
-                if not ok:
-                    warnings.append(
-                        "Pengurus belum ternotifikasi, hubungi admin secara manual."
-                    )
-
-        await interaction.followup.send(msg, ephemeral=True)
+__all__ = ["IntroModal", "IntroView", "ServerEvents", "setup"]
 
 
-class IntroView(ui.View):
-    def __init__(self):
-        super().__init__(timeout=None)
-
-    @ui.button(
-        label="Fill Introduction Form",
-        style=discord.ButtonStyle.primary,
-        custom_id="intro_form_button",
-    )
-    async def open_intro_modal(
-        self, interaction: discord.Interaction, button: ui.Button
-    ):
-        await interaction.response.send_modal(IntroModal())
-
-
-class ServerEvents(commands.Cog):
+class ServerEvents(EventLifecycleMixin, VoiceChannelMixin, commands.Cog):
     def __init__(self, bot):
         self.bot = bot
         self._reminded_cache: set[tuple[int, int]] = set()
@@ -301,213 +71,21 @@ class ServerEvents(commands.Cog):
 
     async def cog_load(self):
         self.bot.add_view(IntroView())
-        # Initialize properties if they don't exist
-        if not hasattr(self.bot, "ai_tools"):
-            self.bot.ai_tools = []
-        if not hasattr(self.bot, "local_tool_handlers"):
-            self.bot.local_tool_handlers = {}
-
-        # Clear old tools from this cog if any (prevents duplication on reload)
-        self.bot.ai_tools = [
-            t
-            for t in self.bot.ai_tools
-            if t.get("function", {}).get("name")
-            not in [
-                "list_discord_events",
-                "create_discord_event",
-                "end_discord_event",
-                "create_discord_thread",
-                "create_discord_poll",
-                "end_discord_poll",
-                "get_server_channels",
-                "get_server_roles",
-                "clear_messages",
-                "check_voice_channel",
-            ]
-        ]
-
-        # 1. Register Pydantic tool schemas to bot memory using token-efficient clean schemas
-        self.bot.ai_tools.append(
+        register_event_tools(
+            self.bot,
             {
-                "type": "function",
-                "function": {
-                    "name": "list_discord_events",
-                    "description": "List scheduled and active events on the server.",
-                    "parameters": get_clean_schema(ListDiscordEventsSchema),
-                },
-            }
+                "list_discord_events": self.list_events_handler,
+                "create_discord_event": self.create_event_handler,
+                "end_discord_event": self.end_event_handler,
+                "create_discord_thread": self.create_thread_handler,
+                "create_discord_poll": self.create_poll_handler,
+                "end_discord_poll": self.end_poll_handler,
+                "get_server_channels": self.get_channels_handler,
+                "get_server_roles": self.get_roles_handler,
+                "clear_messages": self.clear_messages_handler,
+                "check_voice_channel": self.check_voice_channel_handler,
+            },
         )
-        self.bot.local_tool_handlers["list_discord_events"] = self.list_events_handler
-
-        self.bot.ai_tools.append(
-            {
-                "type": "function",
-                "function": {
-                    "name": "create_discord_event",
-                    "description": "Schedule a new server event or meeting.",
-                    "parameters": get_clean_schema(DiscordEventSchema),
-                },
-            }
-        )
-        self.bot.local_tool_handlers["create_discord_event"] = self.create_event_handler
-
-        self.bot.ai_tools.append(
-            {
-                "type": "function",
-                "function": {
-                    "name": "end_discord_event",
-                    "description": "End, close, or stop a Discord Scheduled Event.",
-                    "parameters": get_clean_schema(EndDiscordEventSchema),
-                },
-            }
-        )
-        self.bot.local_tool_handlers["end_discord_event"] = self.end_event_handler
-
-        self.bot.ai_tools.append(
-            {
-                "type": "function",
-                "function": {
-                    "name": "create_discord_thread",
-                    "description": "Create a new thread in current channel.",
-                    "parameters": get_clean_schema(DiscordThreadSchema),
-                },
-            }
-        )
-        self.bot.local_tool_handlers["create_discord_thread"] = (
-            self.create_thread_handler
-        )
-
-        self.bot.ai_tools.append(
-            {
-                "type": "function",
-                "function": {
-                    "name": "create_discord_poll",
-                    "description": "Create an interactive native poll.",
-                    "parameters": get_clean_schema(DiscordPollSchema),
-                },
-            }
-        )
-        self.bot.local_tool_handlers["create_discord_poll"] = self.create_poll_handler
-
-        self.bot.ai_tools.append(
-            {
-                "type": "function",
-                "function": {
-                    "name": "end_discord_poll",
-                    "description": "End an active poll and get final votes.",
-                    "parameters": get_clean_schema(EndDiscordPollSchema),
-                },
-            }
-        )
-        self.bot.local_tool_handlers["end_discord_poll"] = self.end_poll_handler
-
-        self.bot.ai_tools.append(
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_server_channels",
-                    "description": "List all server text and voice channels.",
-                    "parameters": get_clean_schema(GetServerChannelsSchema),
-                },
-            }
-        )
-        self.bot.local_tool_handlers["get_server_channels"] = self.get_channels_handler
-
-        self.bot.ai_tools.append(
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_server_roles",
-                    "description": "List all server roles and IDs.",
-                    "parameters": get_clean_schema(GetServerRolesSchema),
-                },
-            }
-        )
-        self.bot.local_tool_handlers["get_server_roles"] = self.get_roles_handler
-
-        self.bot.ai_tools.append(
-            {
-                "type": "function",
-                "function": {
-                    "name": "clear_messages",
-                    "description": "Delete messages in bulk.",
-                    "parameters": get_clean_schema(ClearMessagesSchema),
-                },
-            }
-        )
-        self.bot.local_tool_handlers["clear_messages"] = self.clear_messages_handler
-
-        self.bot.ai_tools.append(
-            {
-                "type": "function",
-                "function": {
-                    "name": "check_voice_channel",
-                    "description": "List users in a voice channel.",
-                    "parameters": get_clean_schema(CheckVoiceChannelSchema),
-                },
-            }
-        )
-        self.bot.local_tool_handlers["check_voice_channel"] = (
-            self.check_voice_channel_handler
-        )
-
-    @commands.Cog.listener()
-    async def on_ready(self):
-        if self.has_vc_stage_scanned:
-            return
-
-        await self.bot.wait_until_ready()
-
-        category = self.bot.get_channel(self.CATEGORY_ID)
-        if not category or not isinstance(category, discord.CategoryChannel):
-            logger.warning("CategoryChannel for Voice channel not found")
-            self.has_vc_stage_scanned = True
-            return
-
-        logger.info(f"Scanned and cached Category ID: {category.id}")
-        cleaned_vc_count = 0
-        recovered_vc_count = 0
-        cleaned_stage_count = 0
-        recovered_stage_count = 0
-
-        # Scan Voice Channels
-        for channel in category.voice_channels:
-            if channel.id == self.GENERATOR_CHANNEL_ID or not channel.name.startswith(
-                "🔒 "
-            ):
-                continue
-
-            if len(channel.members) == 0:
-                try:
-                    await channel.delete(reason="Cleanup temp channel after restart")
-                    cleaned_vc_count += 1
-                except discord.HTTPException:
-                    pass
-
-            else:
-                self.active_temp_channels.add(channel.id)
-                recovered_vc_count += 1
-
-        # Scan Stage Channels
-        for stage in category.stage_channels:
-            if stage.id == self.GENERATOR_STAGE_ID or not stage.name.startswith("🎙️ "):
-                continue
-
-            if len(stage.members) == 0:
-                try:
-                    await stage.delete(reason="Cleanup temp stage after restart")
-                    cleaned_stage_count += 1
-                except discord.HTTPException:
-                    pass
-            else:
-                self.active_temp_channels.add(stage.id)  # Atau self.active_temp_stages
-                recovered_stage_count += 1
-
-        logger.info(f"Cleaned {cleaned_vc_count} empty temp channels")
-        logger.info(f"Recovered {recovered_vc_count} active temp channels")
-        logger.info(f"Cleaned {cleaned_stage_count} empty temp stages")
-        logger.info(f"Recovered {recovered_stage_count} active temp stages")
-        self.has_vc_stage_scanned = True
 
     async def create_event_handler(self, arguments: dict, ctx_obj=None) -> str:
         """Function called by the LLM brain when create_discord_event tool is used"""
@@ -525,7 +103,7 @@ class ServerEvents(commands.Cog):
                     "Admin",
                 ],
             ):
-                return "❌ DITOLAK: Kamu tidak memiliki izin 'Manage Events' atau peran kepengurusan yang sesuai untuk membuat acara."
+                return "❌ DENIED: You do not have the 'Manage Events' permission or an eligible management role to create an event."
 
             # Strict validation using Pydantic
             event_data = DiscordEventSchema.model_validate(arguments)
@@ -536,7 +114,7 @@ class ServerEvents(commands.Cog):
 
             now_utc = datetime.now(UTC)
             if start_dt <= now_utc:
-                return "❌ Gagal membuat acara: Waktu mulai acara tidak boleh di masa lalu. Harap tentukan tanggal dan jam di masa mendatang."
+                return "❌ Failed to create event: The start time cannot be in the past. Please provide a future date and time."
 
             # For end_time, if provided we parse it, otherwise we set a default of +2 hours
             if event_data.end_date and event_data.end_time:
@@ -546,7 +124,7 @@ class ServerEvents(commands.Cog):
                 end_dt = start_dt + timedelta(hours=2)
 
             if end_dt <= start_dt:
-                return "❌ Gagal membuat acara: Waktu selesai acara harus lebih besar dari waktu mulai acara."
+                return "❌ Failed to create event: The end time must be later than the start time."
 
             # Get the guild/server object where this bot is located
             if not self.bot.guilds:
@@ -714,8 +292,8 @@ class ServerEvents(commands.Cog):
                 else "channel pengumuman"
             )
             return (
-                f"✅ Acara '{event_data.name}' berhasil dijadwalkan dan disiarkan ke {channel_mention}!\n"
-                f"🗓️ Waktu: {format_indonesian_date(start_dt)} pukul {format_time_wib(start_dt)} WIB\n"
+                f"✅ Event '{event_data.name}' was scheduled and announced in {channel_mention}!\n"
+                f"🗓️ Time: {format_indonesian_date(start_dt)} at {format_time_wib(start_dt)} WIB\n"
                 f"📍 Lokasi: {loc_str}\n"
                 f"🔗 Link Event: {event_url}"
             )
@@ -759,7 +337,7 @@ class ServerEvents(commands.Cog):
                 events = [e for e in events if e.status == discord.EventStatus.canceled]
 
             if not events:
-                return "Tidak ada acara terjadwal di server saat ini."
+                return "There are no scheduled events on the server right now."
 
             lines = []
             for e in events:
@@ -781,7 +359,7 @@ class ServerEvents(commands.Cog):
             return "\n".join(lines)
         except Exception as e:  # noqa: BLE001
             logger.error(f"Error in list_events_handler: {e}")
-            return f"❌ Gagal mengambil daftar acara: {e!s}"
+            return f"❌ Failed to retrieve the event list: {e!s}"
 
     async def end_event_handler(self, arguments: dict, ctx_obj=None) -> str:
         """Handler to end/stop a Discord Scheduled Event via tool calling with robust target resolution"""
@@ -791,7 +369,7 @@ class ServerEvents(commands.Cog):
                 "manage_events",
                 allowed_roles=["Leader", "Co-Leader", "Staff-Core", "Admin"],
             ):
-                return "❌ DITOLAK: Kamu tidak memiliki izin 'Manage Events' atau peran kepengurusan yang sesuai untuk mengakhiri acara."
+                return "❌ DENIED: You do not have the 'Manage Events' permission or an eligible management role to end an event."
 
             req_data = EndDiscordEventSchema.model_validate(arguments or {})
             if not self.bot.guilds:
@@ -814,7 +392,7 @@ class ServerEvents(commands.Cog):
                     except Exception:  # noqa: BLE001
                         target_event = None
                 if not target_event:
-                    return f"❌ Tidak ditemukan acara dengan ID {req_data.event_id} di server."
+                    return f"❌ No event with ID {req_data.event_id} was found on the server."
 
             elif req_data.event_name:
                 try:
@@ -830,7 +408,7 @@ class ServerEvents(commands.Cog):
                     ]
                     target_event = active_matched[0] if active_matched else matched[0]
                 else:
-                    return f"❌ Tidak ditemukan acara dengan nama/keyword '{req_data.event_name}' di server."
+                    return f"❌ No event matching the name or keyword '{req_data.event_name}' was found on the server."
 
             else:
                 try:
@@ -846,10 +424,10 @@ class ServerEvents(commands.Cog):
                 elif events:
                     target_event = events[0]
                 else:
-                    return "❌ Tidak ada acara aktif atau terjadwal di server untuk diakhiri."
+                    return "❌ There are no active or scheduled events to end on the server."
 
             if not target_event:
-                return "❌ Tidak ditemukan acara aktif atau terjadwal di server untuk diakhiri."
+                return "❌ No active or scheduled event was found to end on the server."
 
             # Discord Lifecycle State Machine
             try:
@@ -932,10 +510,10 @@ class ServerEvents(commands.Cog):
                 except Exception as c_err:  # noqa: BLE001
                     logger.error(f"Failed to send broadcast completed message: {c_err}")
 
-            return f"✅ Acara '{target_event.name}' berhasil diakhiri dan ditutup dari daftar server."
+            return f"✅ Event '{target_event.name}' was successfully ended and removed from the server listing."
 
         except Exception as e:  # noqa: BLE001
-            return f"❌ Gagal mengakhiri acara. Error: {e!s}"
+            return f"❌ Failed to end event. Error: {e!s}"
 
     async def create_thread_handler(self, arguments: dict, ctx_obj=None):
         try:
@@ -947,7 +525,7 @@ class ServerEvents(commands.Cog):
                 "create_public_threads",
                 allowed_roles=["Leader", "Co-Leader", "Staff-Core", "Admin", "Member"],
             ):
-                return "❌ DITOLAK: Kamu tidak memiliki izin untuk membuat thread di server ini."
+                return "❌ DENIED: You do not have permission to create a thread on this server."
 
             thread_data = DiscordThreadSchema.model_validate(arguments)
             channel = ctx_obj.channel
@@ -979,7 +557,7 @@ class ServerEvents(commands.Cog):
                 "send_messages",
                 allowed_roles=["Leader", "Co-Leader", "Staff-Core", "Admin", "Member"],
             ):
-                return "❌ DITOLAK: Kamu tidak memiliki izin untuk membuat poll di channel ini."
+                return "❌ DENIED: You do not have permission to create a poll in this channel."
 
             poll_data = DiscordPollSchema.model_validate(arguments)
             channel = ctx_obj.channel
@@ -1011,7 +589,7 @@ class ServerEvents(commands.Cog):
                 "manage_messages",
                 allowed_roles=["Leader", "Co-Leader", "Staff-Core", "Admin"],
             ):
-                return "❌ DITOLAK: Kamu tidak memiliki izin 'Manage Messages' atau peran kepengurusan untuk mengakhiri poll."
+                return "❌ DENIED: You do not have the 'Manage Messages' permission or an eligible management role to end a poll."
 
             schema = EndDiscordPollSchema.model_validate(arguments)
             channel = ctx_obj.channel
@@ -1151,7 +729,7 @@ class ServerEvents(commands.Cog):
                 "manage_messages",
                 allowed_roles=["Leader", "Co-Leader", "Staff-Core", "Admin"],
             ):
-                return "❌ DITOLAK: Kamu tidak memiliki izin 'Manage Messages' di server ini."
+                return "❌ DENIED: You do not have the 'Manage Messages' permission on this server."
 
             req_data = ClearMessagesSchema.model_validate(arguments)
             limit = min(req_data.limit, 500)
@@ -1229,7 +807,7 @@ class ServerEvents(commands.Cog):
                 active_events = result.scalars().all()
 
                 for ev in active_events:
-                    expiry_time = ev.end_time or (ev.start_time + timedelta(hours=2))
+                    expiry_time = event_expiry_time(ev.start_time, ev.end_time)
 
                     # Get Discord guild and ScheduledEvent object
                     guild = self.bot.get_guild(ev.guild_id) or (
@@ -1377,7 +955,7 @@ class ServerEvents(commands.Cog):
                                     ),
                                 )
                                 logger.info(
-                                    f"Berhasil mengirim broadcast started untuk event '{ev.name}'"
+                                    f"Successfully sent the started broadcast for event '{ev.name}'"
                                 )
                             except Exception as start_err:  # noqa: BLE001
                                 logger.error(
@@ -1451,7 +1029,7 @@ class ServerEvents(commands.Cog):
 
     @tasks.loop(minutes=15)
     async def sync_events_from_gcal(self):
-        """Mendeteksi agenda baru dari Google Calendar dan membuatnya di Discord."""
+        """Detect new Google Calendar entries and create them in Discord."""
         if not self.bot.guilds:
             return
 
@@ -1476,7 +1054,7 @@ class ServerEvents(commands.Cog):
                     if not gcal_id:
                         continue
 
-                    # Cek apakah sudah pernah tersimpan di DB
+                    # Check whether the event has already been stored in the database.
                     res = await session.execute(
                         select(ScheduledEvent).where(
                             ScheduledEvent.gcal_event_id == gcal_id
@@ -1485,26 +1063,10 @@ class ServerEvents(commands.Cog):
                     if res.scalar_one_or_none():
                         continue  # Sudah tersinkron
 
-                    start_obj = item.get("start", {})
-                    end_obj = item.get("end", {})
-                    is_all_day = "date" in start_obj and "dateTime" not in start_obj
-
-                    start_iso = start_obj.get("dateTime") or start_obj.get("date")
-                    end_iso = end_obj.get("dateTime") or end_obj.get("date")
-                    if not start_iso:
+                    calendar_times = parse_calendar_times(item)
+                    if calendar_times is None:
                         continue
-
-                    start_dt = datetime.fromisoformat(start_iso)
-                    if start_dt.tzinfo is None:
-                        start_dt = start_dt.replace(tzinfo=UTC)
-
-                    end_dt = (
-                        datetime.fromisoformat(end_iso)
-                        if end_iso
-                        else start_dt + timedelta(hours=2)
-                    )
-                    if end_dt.tzinfo is None:
-                        end_dt = end_dt.replace(tzinfo=UTC)
+                    start_dt, end_dt, is_all_day = calendar_times
 
                     name = item.get("summary", "Kegiatan KSM AIoT")
                     desc = item.get(
@@ -1517,7 +1079,7 @@ class ServerEvents(commands.Cog):
                     # Cek validitas waktu terhadap masa sekarang (Anti-Past Event Error)
                     current_now_utc = datetime.now(UTC)
                     if end_dt <= current_now_utc:
-                        # 1. Event sudah selesai sepenuhnya di masa lalu -> Skip dengan tenang
+                        # 1. A fully completed event in the past can be skipped quietly.
                         logger.debug(
                             f"Mengabaikan event lampau '{name}' dari Google Calendar (selesai pada {end_dt})"
                         )
@@ -1537,7 +1099,7 @@ class ServerEvents(commands.Cog):
 
                     if not classification.is_discord_event:
                         logger.info(
-                            f"Agenda GCal '{name}' diklasifikasikan sebagai '{classification.label}' (is_discord_event=False). Melewati pembuatan Discord Scheduled Event."
+                            f"GCal entry '{name}' classified as '{classification.label}' (is_discord_event=False). Skipping Discord Scheduled Event creation."
                         )
                         hash_id = int(
                             hashlib.sha256(gcal_id.encode()).hexdigest()[:14],
@@ -1566,7 +1128,7 @@ class ServerEvents(commands.Cog):
                         await session.commit()
                         continue
 
-                    # Cek apakah event dengan nama & waktu mirip sudah ada di Discord (cegah duplikasi)
+                    # Check for a similar Discord event to prevent duplicates.
                     existing_discord_event = None
                     for ev in guild.scheduled_events:
                         if (
@@ -1581,7 +1143,7 @@ class ServerEvents(commands.Cog):
 
                     if existing_discord_event:
                         logger.info(
-                            f"Event '{name}' dari Google Calendar sudah ada di Discord (ID {existing_discord_event.id}). Menghubungkan ke database tanpa membuat duplikat."
+                            f"Google Calendar event '{name}' already exists in Discord (ID {existing_discord_event.id}). Linking it to the database without creating a duplicate."
                         )
                         self._bot_created_event_ids.add(existing_discord_event.id)
                         res_exist = await session.execute(
@@ -1700,10 +1262,10 @@ class ServerEvents(commands.Cog):
                                 )
 
                         logger.info(
-                            f"Berhasil mensinkronkan event '{name}' ({ev_type}/{classification.label}) dari Google Calendar ke Discord!"
+                            f"Successfully synchronized event '{name}' ({ev_type}/{classification.label}) from Google Calendar to Discord!"
                         )
                     except Exception as e:  # noqa: BLE001
-                        logger.error(f"Gagal membuat Discord Event dari GCal: {e}")
+                        logger.error(f"Failed to create Discord Event from GCal: {e}")
 
     @reminder_loop.before_loop
     async def before_reminder_loop(self):
@@ -1732,7 +1294,7 @@ class ServerEvents(commands.Cog):
         Syncs event to Google Calendar, saves to PostgreSQL, and broadcasts initial announcement.
         """
         try:
-            # 1. Abaikan event yang dibuat oleh Nexo sendiri (mencegah loop/duplikasi)
+            # 1. Ignore events created by Nexo itself to prevent loops and duplicates.
             if event.id in self._bot_created_event_ids:
                 logger.debug(
                     f"Mengabaikan on_scheduled_event_create untuk bot-created event {event.id}"
@@ -1744,7 +1306,7 @@ class ServerEvents(commands.Cog):
                 or (event.creator and event.creator.id == self.bot.user.id)
             ):
                 logger.debug(
-                    f"Mengabaikan on_scheduled_event_create: event {event.id} dibuat oleh bot user"
+                    f"Ignoring on_scheduled_event_create: event {event.id} was created by the bot user"
                 )
                 return
 
@@ -1856,211 +1418,6 @@ class ServerEvents(commands.Cog):
             )
         except Exception:
             logger.exception("Error handling on_scheduled_event_create")
-
-    @commands.Cog.listener()
-    async def on_scheduled_event_update(
-        self, before: discord.ScheduledEvent, after: discord.ScheduledEvent
-    ):
-        """Gateway listener to sync event updates (anti data-drift)"""
-        try:
-            async with async_session() as session:
-                result = await session.execute(
-                    select(ScheduledEvent).where(ScheduledEvent.id == after.id)
-                )
-                db_event = result.scalar_one_or_none()
-                if not db_event:
-                    return
-
-                if after.status in (
-                    discord.EventStatus.completed,
-                    discord.EventStatus.cancelled,
-                ):
-                    db_event.is_active = False
-                else:
-                    # Check if event was just transitioned to active
-                    was_not_active = before.status != discord.EventStatus.active
-                    is_now_active = after.status == discord.EventStatus.active
-                    sent_list = list(db_event.reminders_sent or [])
-
-                    if (
-                        was_not_active
-                        and is_now_active
-                        and 0 not in sent_list
-                        and (db_event.id, 0) not in self._reminded_cache
-                    ):
-                        # Claim lock immediately in cache and DB
-                        self._reminded_cache.add((db_event.id, 0))
-                        sent_list.append(0)
-                        db_event.reminders_sent = sent_list
-                        flag_modified(db_event, "reminders_sent")
-                        await session.commit()
-
-                        channel = self.bot.get_channel(db_event.broadcast_channel_id)
-                        if not channel:
-                            try:
-                                channel = await self.bot.fetch_channel(
-                                    db_event.broadcast_channel_id
-                                )
-                            except Exception:  # noqa: BLE001
-                                channel = None
-
-                        if channel:
-                            role_mention_str = (
-                                f"<@&{db_event.target_role_id}>"
-                                if db_event.target_role_id
-                                else None
-                            )
-                            start_ctx = {
-                                "event": {
-                                    "name": db_event.name,
-                                    "location": db_event.location,
-                                    "event_url": db_event.event_url,
-                                },
-                                "role_mention": role_mention_str,
-                            }
-                            try:
-                                fallback_start = render_event_template(
-                                    "events/broadcast_started.j2", start_ctx
-                                )
-                                start_text = await generate_dynamic_event_message(
-                                    event_type="started",
-                                    event_name=db_event.name,
-                                    event_description=db_event.description,
-                                    fallback_text=fallback_start,
-                                    role_mention=role_mention_str,
-                                    timeout_sec=120.0,
-                                )
-                                await channel.send(
-                                    start_text,
-                                    allowed_mentions=discord.AllowedMentions(
-                                        everyone=True, roles=True, users=True
-                                    ),
-                                )
-                                logger.info(
-                                    f"Broadcast started dikirim via on_scheduled_event_update untuk '{db_event.name}'"
-                                )
-                            except Exception as start_err:  # noqa: BLE001
-                                logger.error(
-                                    f"Failed to send started broadcast on update: {start_err}"
-                                )
-
-                    db_event.name = after.name
-                    db_event.description = after.description
-                    if after.location:
-                        db_event.location = after.location
-                    elif after.channel:
-                        db_event.location = after.channel.name
-
-                    if after.start_time and after.start_time != db_event.start_time:
-                        db_event.start_time = after.start_time
-                        # Re-prune intervals for updated start time
-                        db_event.reminder_intervals = prune_reminder_intervals(
-                            after.start_time
-                        )
-                        # Reset sent reminders whose triggers are now in the future
-                        now_utc = datetime.now(UTC)
-                        db_event.reminders_sent = [
-                            i
-                            for i in (db_event.reminders_sent or [])
-                            if now_utc >= (after.start_time - timedelta(minutes=i))
-                        ]
-                        flag_modified(db_event, "reminder_intervals")
-                        flag_modified(db_event, "reminders_sent")
-
-                    if after.end_time:
-                        db_event.end_time = after.end_time
-
-                await session.commit()
-        except Exception as e:  # noqa: BLE001
-            logger.error(f"Error handling scheduled event update: {e}")
-
-    @commands.Cog.listener()
-    async def on_scheduled_event_delete(self, event: discord.ScheduledEvent):
-        """Gateway listener to stop reminders when an event is deleted"""
-        try:
-            async with async_session() as session:
-                result = await session.execute(
-                    select(ScheduledEvent).where(ScheduledEvent.id == event.id)
-                )
-                db_event = result.scalar_one_or_none()
-                if db_event:
-                    db_event.is_active = False
-                    await session.commit()
-        except Exception as e:  # noqa: BLE001
-            logger.error(f"Error handling scheduled event delete: {e}")
-
-    @commands.Cog.listener()
-    async def on_voice_state_update(
-        self,
-        member: discord.Member,
-        before: discord.VoiceState,
-        after: discord.VoiceState,
-    ):
-        if after.channel and after.channel.id == self.GENERATOR_CHANNEL_ID:
-            guild = member.guild
-            category = after.channel.category
-
-            overwrites = category.overwrites.copy() if category else {}
-
-            overwrites[member] = discord.PermissionOverwrite(
-                manage_channels=True,
-                move_members=True,
-                manage_permissions=True,
-            )
-
-            try:
-                temp_channel = await guild.create_voice_channel(
-                    name=f"🔒 {member.display_name}'s Room",
-                    category=category,
-                    overwrites=overwrites,
-                )
-
-                self.active_temp_channels.add(temp_channel.id)
-
-                await member.move_to(temp_channel)
-
-            except discord.HTTPException as e:
-                logger.error(f"Failed to create temp channel: {e}")
-                return
-
-        elif after.channel and after.channel.id == self.GENERATOR_STAGE_ID:
-            guild = member.guild
-            category = after.channel.category
-
-            overwrites = category.overwrites.copy() if category else {}
-
-            overwrites[member] = discord.PermissionOverwrite(
-                manage_channels=True,
-                move_members=True,
-                mute_members=True,
-                manage_permissions=True,
-            )
-
-            try:
-                temp_stage = await guild.create_stage_channel(
-                    name=f"🎙 {member.display_name}'s Stage",
-                    category=category,
-                    overwrites=overwrites,
-                )
-                self.active_temp_channels.add(temp_stage.id)
-
-                await member.move_to(temp_stage)
-            except discord.HTTPException as e:
-                logger.error(f"Failed to create temp stage: {e}")
-                return
-
-        if (
-            before.channel
-            and before.channel.id in self.active_temp_channels
-            and len(before.channel.members) == 0
-        ):
-            try:
-                self.active_temp_channels.remove(before.channel.id)
-                await before.channel.delete(reason="Temp channel empty.")
-            except discord.NotFound:
-                pass
-            except discord.HTTPException as e:
-                logger.error(f"Failed to delete temp channel: {e}")
 
 
 async def setup(bot):
