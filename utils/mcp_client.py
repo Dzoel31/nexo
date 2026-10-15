@@ -294,6 +294,35 @@ async def check_services_health():
     return True, "All systems go"
 
 
+async def check_llm_health():
+    """Check only the LLM required to answer a normal conversation."""
+    try:
+        async with (
+            aiohttp.ClientSession() as session,
+            session.get(
+                f"{LLM_BASE_URL.replace('/v1', '')}/health/liveness",
+                timeout=aiohttp.ClientTimeout(total=2),
+            ) as response,
+        ):
+            if response.status != 200:
+                logger.error(
+                    "llama-server health check failed with response: %s",
+                    response.status,
+                )
+                return (
+                    False,
+                    f"**llama-server** responded with an error ({response.status}).",
+                )
+    except Exception as error:  # noqa: BLE001
+        logger.warning("llama-server health check failed: %s", error)
+        return (
+            False,
+            f"**llama-server** is OFFLINE. Please start the LLM server. Error: {error}",
+        )
+
+    return True, "LLM server is online"
+
+
 async def process_with_mcp_tools(
     bot,
     user_id: int,

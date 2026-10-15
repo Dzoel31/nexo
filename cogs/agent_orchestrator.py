@@ -18,7 +18,7 @@ from db.repository import (
 from utils.mcp_client import (
     SYSTEM_PROMPT,
     ai_client,
-    check_services_health,
+    check_llm_health,
     get_tools_from_mcp_server,
     process_with_mcp_tools,
     sanitize_tools_list,
@@ -32,6 +32,8 @@ class AgentOrchestrator(commands.Cog):
         self.bot = bot
         self.worker_task = None
         self._mention_cooldowns: dict[int, float] = {}
+        self._mcp_refresh_task: asyncio.Task | None = None
+        self._mcp_refresh_retry_after = 0.0
 
     async def cog_load(self):
         # Ensure queue and lock exist on bot
@@ -43,7 +45,9 @@ class AgentOrchestrator(commands.Cog):
         # Load tools on startup
         try:
             if not hasattr(self.bot, "cached_mcp_tools"):
-                self.bot.cached_mcp_tools = await get_tools_from_mcp_server()
+                self.bot.cached_mcp_tools = await asyncio.wait_for(
+                    get_tools_from_mcp_server(), timeout=3
+                )
         except Exception as e:  # noqa: BLE001
             logger.warning(f"MCP Server not available on startup: {e}")
 
@@ -76,6 +80,30 @@ class AgentOrchestrator(commands.Cog):
     async def cog_unload(self):
         if self.worker_task:
             self.worker_task.cancel()
+        if self._mcp_refresh_task:
+            self._mcp_refresh_task.cancel()
+
+    def _schedule_mcp_tools_refresh(self):
+        """Refresh optional MCP tools in the background without blocking chat."""
+        if getattr(self.bot, "cached_mcp_tools", None):
+            return
+        if self._mcp_refresh_task and not self._mcp_refresh_task.done():
+            return
+        now = time.monotonic()
+        if now < self._mcp_refresh_retry_after:
+            return
+        self._mcp_refresh_retry_after = now + 30
+        self._mcp_refresh_task = asyncio.create_task(self._refresh_mcp_tools())
+
+    async def _refresh_mcp_tools(self):
+        try:
+            tools = await asyncio.wait_for(get_tools_from_mcp_server(), timeout=3)
+        except Exception as error:  # noqa: BLE001
+            logger.debug("Optional MCP tool refresh failed: %s", error)
+            return
+        if tools:
+            self.bot.cached_mcp_tools = tools
+            logger.info("Loaded %s optional MCP tools", len(tools))
 
     async def worker(self):
         """Constantly watches the queue and processes requests one by one with guaranteed lifecycle and recovery"""
@@ -279,19 +307,12 @@ class AgentOrchestrator(commands.Cog):
     async def tanya(self, interaction: discord.Interaction, pertanyaan: str):
         await interaction.response.defer(ephemeral=False)
 
-        is_healthy, error_msg = await check_services_health()
+        is_healthy, error_msg = await check_llm_health()
         if not is_healthy:
             await interaction.edit_original_response(content=error_msg)
             return
 
-        if not getattr(self.bot, "cached_mcp_tools", []):
-            try:
-                self.bot.cached_mcp_tools = await get_tools_from_mcp_server()
-            except Exception:  # noqa: BLE001
-                await interaction.edit_original_response(
-                    content="⚠️ Failed to fetch tools from the MCP Server."
-                )
-                return
+        self._schedule_mcp_tools_refresh()
 
         logger.info(f"User: {interaction.user.name} asked: {pertanyaan}")
 
@@ -538,10 +559,12 @@ class AgentOrchestrator(commands.Cog):
             self._mention_cooldowns[message.author.id] = now
 
             try:
-                is_healthy, error_msg = await check_services_health()
+                is_healthy, error_msg = await check_llm_health()
                 if not is_healthy:
                     await message.reply(content=error_msg)
                     return
+
+                self._schedule_mcp_tools_refresh()
 
                 # Fetch previous messages history safely
                 history_msgs = []
