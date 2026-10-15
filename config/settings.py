@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     )
     GITHUB_SECRET: str = Field(default="", validation_alias="GITHUB_SECRET")
 
+    PENGURUS_CHANNEL_ID: int = Field(default=0, validation_alias="PENGURUS_CHANNEL_ID")
     ANNOUNCEMENT_CHANNEL_ID: int = Field(
         default=0, validation_alias="ANNOUNCEMENT_CHANNEL_ID"
     )
@@ -32,6 +33,7 @@ class Settings(BaseSettings):
     GENERATOR_STAGE_ID: int = Field(default=0, validation_alias="GENERATOR_STAGE_ID")
     CATEGORY_ID: int = Field(default=0, validation_alias="CATEGORY_ID")
     MEMBER_ROLE_ID: int = Field(default=0, validation_alias="MEMBER_ROLE_ID")
+    PENGURUS_ROLE_ID: int = Field(default=0, validation_alias="PENGURUS_ROLE_ID")
 
     LLM_BASE_URL: str = Field(
         default="http://litellm-gateway:4000/v1",

@@ -134,3 +134,46 @@ def has_permission(
 
     # Check Role Whitelist Fallback
     return bool(allowed_roles and has_role(member, *allowed_roles))
+
+
+def get_role_id_by_name(guild: discord.Guild, role_name: str) -> int | None:
+    """Returns the role ID for a given role name from the roles configuration."""
+
+    roles_map = load_roles_config()
+    role_id = roles_map.get(role_name)
+    if role_id:
+        return role_id
+
+    # Fallback: search in guild roles by name
+    role = discord.utils.get(guild.roles, name=role_name)
+    if role:
+        return role.id
+
+    logger.warning(f"Role '{role_name}' not found in roles configuration or guild.")
+    return None
+
+
+async def assign_role_to_member(member: discord.Member, role_name: str) -> bool:
+    """
+    Assigns a role to a member by role name using the roles configuration.
+    Returns True if the role was successfully assigned, False otherwise.
+    """
+    roles_map = load_roles_config()
+    role_id = roles_map.get(role_name)
+    if not role_id:
+        logger.warning(f"Role '{role_name}' not found in roles configuration.")
+        return False
+
+    role = discord.utils.get(member.guild.roles, id=role_id)
+    if not role:
+        logger.warning(
+            f"Role with ID '{role_id}' not found in guild '{member.guild.name}'."
+        )
+        return False
+
+    try:
+        await member.add_roles(role, reason="KSM AIoT introduction form")
+    except discord.Forbidden:
+        logger.error("Bot tidak punya izin memberi role, hubungi admin.")
+    except discord.HTTPException as e:
+        logger.error(f"Gagal assign role: {e}")

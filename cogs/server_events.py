@@ -7,6 +7,7 @@ import re
 from datetime import UTC, datetime, timedelta
 
 import discord
+from discord import ui
 from discord.ext import commands, tasks
 from sqlalchemy import select
 from sqlalchemy.orm.attributes import flag_modified
@@ -44,6 +45,239 @@ from utils.template_renderer import render_event_template
 logger = logging.getLogger("server_events")
 
 
+class IntroModal(ui.Modal, title="Perkenalkan Diri Kamu"):
+    nickname = ui.Label(
+        text="Nama Panggilan / Nickname",
+        component=ui.TextInput(placeholder="Contoh: John"),
+    )
+    id_number = ui.Label(
+        text="NIM/NIDN/NIP",
+        component=ui.TextInput(placeholder="Contoh: 1234567890"),
+    )
+    batch = ui.Label(
+        text="Angkatan",
+        component=ui.TextInput(placeholder="Contoh: 2026", min_length=4, max_length=4),
+    )
+    hobby_interest = ui.Label(
+        text="Hobby & Interest",
+        component=ui.TextInput(
+            placeholder="Contoh: Ngoding", style=discord.TextStyle.long
+        ),
+    )
+
+    major_select = ui.Label(
+        text="Pilih Program Studi (Major)",
+        component=ui.Select(
+            placeholder="Pilih jurusan kamu...",
+            options=[
+                discord.SelectOption(label="Informatika (IF)", value="IF"),
+                discord.SelectOption(label="Sistem Informasi (SI)", value="SI"),
+                discord.SelectOption(label="D3 Sistem Informasi (D3SI)", value="D3SI"),
+                discord.SelectOption(label="Data Sains (DS)", value="DS"),
+            ],
+        ),
+    )
+
+    async def notify_pengurus(
+        self,
+        guild: discord.Guild,
+        user: discord.Member,
+        nickname: str,
+        id_type: str,
+        id_number: str,
+        major: str,
+        batch: str,
+        intro_message: discord.Message | None,
+    ) -> bool:
+        channel = guild.get_channel(settings.PENGURUS_CHANNEL_ID)
+        if channel is None:
+            logger.error(
+                "PENGURUS_CHANNEL_ID tidak valid atau channel tidak ditemukan."
+            )
+            return False
+
+        embed = discord.Embed(
+            title="Verifikasi Dosen Diperlukan",
+            description=f"{user.mention} mengisi form perkenalan sebagai dosen.",
+            color=discord.Color.orange(),
+        )
+        embed.add_field(name="Nickname", value=nickname, inline=True)
+        embed.add_field(name=id_type, value=id_number, inline=True)
+        embed.add_field(name="Major", value=major, inline=True)
+        embed.add_field(name="Batch", value=batch, inline=True)
+        embed.add_field(name="User ID", value=str(user.id), inline=True)
+        if intro_message:
+            embed.add_field(
+                name="Pesan intro",
+                value=f"[Lihat]({intro_message.jump_url})",
+                inline=False,
+            )
+        embed.set_footer(text="Nexo Bot - KSM AIoT")
+
+        content = None
+        mentions = discord.AllowedMentions.none()
+        if settings.PENGURUS_ROLE_ID:
+            content = f"<@&{settings.PENGURUS_ROLE_ID}>"
+            mentions = discord.AllowedMentions(
+                roles=[discord.Object(id=settings.PENGURUS_ROLE_ID)]
+            )
+
+        try:
+            await channel.send(content=content, embed=embed, allowed_mentions=mentions)
+            return True
+        except discord.HTTPException as e:  # termasuk Forbidden
+            logger.error(f"Gagal kirim notifikasi ke pengurus: {e}")
+            return False
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer(ephemeral=True)
+
+        guild = interaction.guild
+        user = interaction.user
+        if guild is None:
+            await interaction.followup.send(
+                "⚠️ Form ini hanya bisa digunakan di dalam server.", ephemeral=True
+            )
+            return
+
+        # Ambil nilai input dari form
+        id_number = self.id_number.component.value.strip()
+        nickname = self.nickname.component.value.strip()
+        major = self.major_select.component.values[0]
+        batch = self.batch.component.value.strip()
+        hobby_interest = self.hobby_interest.component.value
+
+        # 1. Parsing identitas: hanya digit 0-9, tanpa pembersihan karakter lain
+        if not re.fullmatch(r"[0-9]+", id_number):
+            await interaction.followup.send(
+                "⚠️ Identitas hanya boleh berisi angka (tanpa spasi, titik, atau tanda hubung).",
+                ephemeral=True,
+            )
+            return
+
+        # Pattern NIM Mahasiswa: 2 digit angkatan + '10' + 3 digit prodi + 3 digit nomor urut
+        nim_match = re.fullmatch(r"([0-9]{2})10([0-9]{3})([0-9]{3})", id_number)
+        is_nip = bool(re.fullmatch(r"[0-9]{18}", id_number))
+        is_nidn = bool(re.fullmatch(r"[0-9]{10}", id_number)) and not nim_match
+
+        if not (nim_match or is_nip or is_nidn):
+            await interaction.followup.send(
+                "⚠️ Format identitas tidak valid. Harap masukkan NIM (10 digit), "
+                "NIDN (10 digit), atau NIP Dosen (18 digit).",
+                ephemeral=True,
+            )
+            return
+
+        # 2. Nickname
+        if nim_match:
+            year_short = nim_match.group(1)
+            seq_num = nim_match.group(3)
+            suffix = f" {major}'{year_short} {seq_num}"
+        else:
+            suffix = " [Dosen]"
+
+        # Potong bagian nama saja supaya suffix/tag tidak ikut terpotong
+        new_nickname = nickname[: 32 - len(suffix)] + suffix
+
+        # Semua akun mendapat role Member; role Dosen diberikan manual oleh admin
+        warnings: list[str] = []
+        role = (
+            guild.get_role(settings.MEMBER_ROLE_ID) if settings.MEMBER_ROLE_ID else None
+        )
+
+        # 3. Assign role
+        if role is None:
+            logger.error("MEMBER_ROLE_ID tidak valid atau role tidak ditemukan.")
+            warnings.append("Role Member tidak ditemukan, hubungi admin.")
+        elif role not in user.roles:
+            try:
+                await user.add_roles(role, reason="KSM AIoT introduction form")
+            except discord.Forbidden:
+                warnings.append("Bot tidak punya izin memberi role, hubungi admin.")
+            except discord.HTTPException as e:
+                logger.error(f"Gagal assign role: {e}")
+                warnings.append("Gagal memberi role, hubungi admin.")
+
+        # 4. Ganti nickname (dipisah supaya kegagalan di sini tidak membatalkan role/intro)
+        if user.nick != new_nickname:
+            try:
+                await user.edit(nick=new_nickname, reason="KSM AIoT introduction form")
+            except discord.Forbidden:
+                warnings.append(
+                    "Nickname tidak bisa diubah otomatis (kemungkinan role kamu di atas bot)."
+                )
+            except discord.HTTPException as e:
+                logger.error(f"Gagal ubah nickname: {e}")
+                warnings.append("Gagal mengubah nickname.")
+
+        # 5. Pesan perkenalan: versi Mahasiswa (dengan NIM) dan Dosen (tanpa ID)
+        if nim_match:
+            formatted_intro = (
+                f"**Nickname:** {nickname}\n"
+                f"**NIM:** {id_number}\n"
+                f"**Major:** {major}\n"
+                f"**Batch:** {batch}\n"
+                f"**Hobby & Interest:** {hobby_interest}"
+            )
+        else:
+            formatted_intro = (
+                f"**Nickname:** {nickname}\n"
+                f"**Major:** {major}\n"
+                f"**Batch:** {batch}\n"
+                f"**Hobby & Interest:** {hobby_interest}"
+            )
+
+        pub_message = None
+        try:
+            pub_message = await interaction.channel.send(
+                content=formatted_intro,
+                allowed_mentions=discord.AllowedMentions.none(),
+            )
+            await pub_message.add_reaction("👋")
+            await pub_message.reply(
+                f"Nice to meet you, {user.mention}! Welcome to KSM AIoT! 🚀",
+                allowed_mentions=discord.AllowedMentions(users=[user]),
+            )
+        except discord.Forbidden:
+            warnings.append("Bot tidak punya izin mengirim pesan di channel ini.")
+        except discord.HTTPException as e:
+            logger.error(f"Gagal kirim intro: {e}")
+            warnings.append("Gagal mengirim perkenalan ke channel.")
+
+        # 6. Balasan privat
+        if warnings:
+            msg = "⚠️ Form diproses, tapi ada kendala:\n- " + "\n- ".join(warnings)
+        else:
+            msg = "Form perkenalan kamu berhasil dikirim!"
+            if not nim_match:
+                msg += "\nRole Dosen akan diberikan admin setelah verifikasi."
+                id_type = "NIP" if is_nip else "NIDN"
+                ok = await self.notify_pengurus(
+                    guild, user, nickname, id_type, id_number, major, batch, pub_message
+                )
+                if not ok:
+                    warnings.append(
+                        "Pengurus belum ternotifikasi, hubungi admin secara manual."
+                    )
+
+        await interaction.followup.send(msg, ephemeral=True)
+
+
+class IntroView(ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+
+    @ui.button(
+        label="Fill Introduction Form",
+        style=discord.ButtonStyle.primary,
+        custom_id="intro_form_button",
+    )
+    async def open_intro_modal(
+        self, interaction: discord.Interaction, button: ui.Button
+    ):
+        await interaction.response.send_modal(IntroModal())
+
+
 class ServerEvents(commands.Cog):
     def __init__(self, bot):
         self.bot = bot
@@ -66,6 +300,7 @@ class ServerEvents(commands.Cog):
         self.sync_events_from_gcal.cancel()
 
     async def cog_load(self):
+        self.bot.add_view(IntroView())
         # Initialize properties if they don't exist
         if not hasattr(self.bot, "ai_tools"):
             self.bot.ai_tools = []
@@ -963,21 +1198,14 @@ class ServerEvents(commands.Cog):
         try:
             channel = self.bot.get_channel(channel_id)
             if channel:
-                welcome_msg = (
-                    f"Welcome {member.mention} to the KSM AIoT server! 👋\n"
-                    f"To get full access, please introduce yourself using the following format:\n\n"
-                    f"```text\n"
-                    f"Name:\n"
-                    f"Nickname:\n"
-                    f"NIM:\n"
-                    f"Major(IF/SI/D3SI/DS): \n"
-                    f"Batch/Year:\n"
-                    f"Hobby:\n"
-                    f"Interest:\n"
-                    f"```\n"
-                    f"💡 *Note: Discord automatically removes accounts without roles when disconnected/closed. Please complete your intro to keep your access!*"
+                welcome_message = (
+                    f"Welcome {member.mention} to the **KSM AIoT** server! 👏\n"
+                    "To get full access, please introduce yourself by clicking the button below.\n\n"
+                    "💡 *Note: Discord automatically removes accounts without roles when disconnected/closed. "
+                    "Please complete your intro to keep your access!*"
                 )
-                await channel.send(welcome_msg)
+
+                await channel.send(welcome_message, view=IntroView())
         except discord.Forbidden:
             logger.error(
                 "Failed to send welcome message: Bot does not have Send Messages or View Channel permission."
@@ -986,101 +1214,6 @@ class ServerEvents(commands.Cog):
             logger.error(f"Failed to send welcome message (HTTP Exception): {e}")
         except Exception as e:  # noqa: BLE001
             logger.error(f"Unexpected error during welcome message: {e}")
-
-    @commands.Cog.listener()
-    async def on_message(self, message):
-        """Check messages in a specific channel to automatically assign roles"""
-        # Ignore messages from the bot itself
-        if message.author.bot:
-            return
-
-        try:
-            channel_id = settings.WELCOME_AND_RULES_CHANNEL_ID
-        except ValueError:
-            logger.error("Invalid channel ID in environment variable.")
-            return
-
-        # Only monitor messages in the welcome-and-rules channel
-        if message.channel.id == channel_id:
-            fields = {}
-            for line in message.content.splitlines():
-                if ":" not in line:
-                    continue
-                key, value = line.split(":", 1)
-                fields[key.strip().lower()] = value.strip()
-
-            introduction_fields = {
-                "name",
-                "nickname",
-                "nim",
-                "major(if/si/d3si/ds)",
-                "batch/year",
-                "hobby",
-                "interest",
-            }
-            if not introduction_fields.intersection(fields):
-                return
-
-            required_fields = [
-                "name",
-                "nickname",
-                "nim",
-                "major(if/si/d3si/ds)",
-                "batch/year",
-                "hobby",
-                "interest",
-            ]
-            missing_fields = [
-                field for field in required_fields if not fields.get(field)
-            ]
-            if missing_fields:
-                await message.reply(
-                    "⚠️ Your introduction is incomplete. Missing: "
-                    + ", ".join(missing_fields)
-                    + ".",
-                    delete_after=10,
-                )
-                return
-
-            nim = fields["nim"]
-            if not re.fullmatch(r"\d{8,}", nim):
-                await message.reply(
-                    "⚠️ NIM must contain at least 8 digits.", delete_after=10
-                )
-                return
-
-            member_role_id = settings.MEMBER_ROLE_ID
-            role = message.guild.get_role(member_role_id) if member_role_id else None
-
-            if not role:
-                await message.reply(
-                    "⚠️ I could not find the member role. Please tell the admin to create it.",
-                    delete_after=10,
-                )
-                return
-
-            try:
-                if role not in message.author.roles:
-                    await message.author.add_roles(role)
-
-                new_nickname = (
-                    f"{fields['nickname']} {fields['major(if/si/d3si/ds)'].upper()}"
-                    f"'{nim[:2]} {nim[7:]}"
-                )[:32]
-                if message.author.nick != new_nickname:
-                    await message.author.edit(nick=new_nickname)
-
-                await message.add_reaction("👋")
-                await message.reply(
-                    f"Nice to meet you, {fields['nickname']}! Welcome to KSM AIoT! 🚀",
-                )
-            except discord.Forbidden:
-                await message.reply(
-                    "⚠️ The KSM AIoT Bot does not have permission to assign the role or change your nickname.",
-                    delete_after=10,
-                )
-            except Exception as e:  # noqa: BLE001
-                logger.error(f"Error processing introduction: {e}")
 
     @tasks.loop(seconds=60)
     async def reminder_loop(self):
