@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.17.0 (2026-10-16)
+
+### Bug Fixes
+
+- Keep chat available when MCP is offline
+  ([`e6daac1`](https://github.com/ksm-aiot-upnvj/nexo/commit/e6daac1042b19d47dea3a23cd686f3cb5908bb4c))
+
+### Features
+
+- **onboarding**: Update intro template codeblock to introduction form and student/lecturer handler
+  ([`5012489`](https://github.com/ksm-aiot-upnvj/nexo/commit/5012489c40e9652c533bd5b38e9534e36a643714))
+
+
 ## v1.16.0 (2026-10-10)
 
 ### Bug Fixes
