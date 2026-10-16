@@ -11,6 +11,7 @@ services:
       - HOST
       - DATABASE_URL
       - GITHUB_SECRET
+      - PENGURUS_CHANNEL_ID
       - ANNOUNCEMENT_CHANNEL_ID
       - WEBHOOK_DEVLOGS_CHANNEL_ID
       - WEBHOOK_RELEASE_NOTES_CHANNEL_ID
@@ -25,11 +26,12 @@ services:
       - GENERATOR_STAGE_ID
       - CATEGORY_ID
       - MEMBER_ROLE_ID
+      - PENGURUS_ROLE_ID
     volumes:
       - ./prompts:/app/prompts
       - ./data:/app/data
-      - /home/admin-iot-hydroponik/ksm-aiot/nexo/credentials:/app/credentials:ro
-      - /home/admin-iot-hydroponik/ksm-aiot:/home/admin-iot-hydroponik/ksm-aiot:ro
+      - /home/admin-iot/ksm-aiot/nexo/credentials:/app/credentials:ro
+      - /home/admin-iot/ksm-aiot:/home/admin-iot-hydroponik/ksm-aiot:ro
     dns:
       - 8.8.8.8
       - 1.1.1.1
