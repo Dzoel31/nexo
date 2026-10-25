@@ -31,6 +31,7 @@ from utils.event_manager import (
     to_wib,
 )
 from utils.gcal_manager import create_gcal_event, delete_gcal_event, list_gcal_events
+from utils.message_cleanup import slow_purge
 from utils.schemas import (
     CheckVoiceChannelSchema,
     ClearMessagesSchema,
@@ -754,8 +755,11 @@ class ServerEvents(EventLifecycleMixin, VoiceChannelMixin, commands.Cog):
                     return msg.created_at >= today_start
                 return True
 
-            # channel.purge() automatically handles bulk_delete (<14 days) and single delete (>14 days)
-            deleted = await channel.purge(limit=limit + 2, check=check_msg)
+            deleted = await slow_purge(
+                channel,
+                limit=limit + 2,
+                check=check_msg,
+            )
             logger.info(
                 f"Successfully deleted {len(deleted)} messages in channel {channel.name}."
             )
@@ -779,8 +783,6 @@ class ServerEvents(EventLifecycleMixin, VoiceChannelMixin, commands.Cog):
                 welcome_message = (
                     f"Welcome {member.mention} to the **KSM AIoT** server! 👏\n"
                     "To get full access, please introduce yourself by clicking the button below.\n\n"
-                    "💡 *Note: Discord automatically removes accounts without roles when disconnected/closed. "
-                    "Please complete your intro to keep your access!*"
                 )
 
                 await channel.send(welcome_message, view=IntroView())

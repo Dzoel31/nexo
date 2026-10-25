@@ -24,6 +24,7 @@ from utils.mcp_client import (
     MCP_SERVER_URL,
     get_tools_from_mcp_server,
 )
+from utils.message_cleanup import slow_purge
 
 logger = logging.getLogger("core_commands")
 
@@ -665,8 +666,7 @@ class CoreCommands(commands.Cog):
         await ctx.send(f"🧹 Starting deletion of {limit} messages...")
 
         try:
-            # channel.purge() automatically handles bulk_delete (<14 days) and single delete (>14 days)
-            deleted = await ctx.channel.purge(limit=limit + 2)
+            deleted = await slow_purge(ctx.channel, limit=limit + 2)
             await ctx.send(
                 f"✅ Successfully deleted {len(deleted)} messages!", delete_after=3
             )

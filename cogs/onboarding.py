@@ -9,24 +9,29 @@ from config.settings import settings
 logger = logging.getLogger("onboarding")
 
 
-class IntroModal(ui.Modal, title="Introduce Yourself"):
+class IntroModal(ui.Modal, title="Form Perkenalan KSM AIoT"):
     nickname = ui.Label(
         text="Nickname",
-        component=ui.TextInput(placeholder="Example: John"),
+        component=ui.TextInput(placeholder="Contoh: John"),
+        description="Nama panggilan yang akan digunakan di server.",
     )
     id_number = ui.Label(
-        text="NIM/NIDN/NIP",
-        component=ui.TextInput(placeholder="Example: 1234567890"),
+        text="NIM / NIDN / NIP",
+        component=ui.TextInput(placeholder="Contoh: 2210511084"),
+        description="Nomor identitas (10 digit NIM/NIDN atau 18 digit NIP Dosen).",
     )
     batch = ui.Label(
-        text="Batch",
-        component=ui.TextInput(placeholder="Example: 2026", min_length=4, max_length=4),
+        text="Angkatan / Batch",
+        component=ui.TextInput(placeholder="Contoh: 2026", min_length=4, max_length=4),
+        description="Tahun angkatan kamu.",
     )
     hobby_interest = ui.Label(
-        text="Hobbies and Interests",
+        text="Hobi & Minat",
         component=ui.TextInput(
-            placeholder="Example: Programming", style=discord.TextStyle.long
+            placeholder="Contoh: Machine Learning, IoT, Game Dev",
+            style=discord.TextStyle.long,
         ),
+        description="Hobi dan bidang minat yang sedang ditekuni.",
     )
 
     major_select = ui.Label(
@@ -113,6 +118,13 @@ class IntroModal(ui.Modal, title="Introduce Yourself"):
         if not re.fullmatch(r"[0-9]+", id_number):
             await interaction.followup.send(
                 "⚠️ The identification number may only contain digits.",
+                ephemeral=True,
+            )
+            return
+        
+        if len(id_number) not in (10, 18):
+            await interaction.followup.send(
+                "⚠️ ID must be a 10-digit NIM/NIDN or 18-digit NIP.",
                 ephemeral=True,
             )
             return
