@@ -121,7 +121,7 @@ class IntroModal(ui.Modal, title="Form Perkenalan KSM AIoT"):
                 ephemeral=True,
             )
             return
-        
+
         if len(id_number) not in (10, 18):
             await interaction.followup.send(
                 "⚠️ ID must be a 10-digit NIM/NIDN or 18-digit NIP.",
