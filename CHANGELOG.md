@@ -2,6 +2,19 @@
 
 <!-- version list -->
 
+## v1.17.1 (2026-10-25)
+
+### Bug Fixes
+
+- **discord**: Throttle cleanup and improve onboarding
+  ([`a362eda`](https://github.com/ksm-aiot-upnvj/nexo/commit/a362eda3dfd9d32c11159c4b3d16e2f7660e4548))
+
+### Documentation
+
+- Add Nexo documentation and Pages deployment
+  ([`3607c2c`](https://github.com/ksm-aiot-upnvj/nexo/commit/3607c2c18eaf6a63b67f2cd802c40ff40b4cad90))
+
+
 ## v1.17.0 (2026-10-16)
 
 ### Bug Fixes
