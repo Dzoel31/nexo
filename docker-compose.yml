@@ -40,11 +40,11 @@ services:
         limits:
           memory: 300M
     networks:
-      - hydroponic_network
+      - ksm-aiot-network
       - llm-aiot-network
 
 networks:
-  hydroponic_network:
+  ksm-aiot-network:
     external: true
 
   llm-aiot-network:
