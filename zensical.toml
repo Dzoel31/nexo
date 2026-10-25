@@ -1,0 +1,63 @@
+[project]
+site_name = "Nexo KSM AIoT"
+site_description = "Dokumentasi bot Discord, chatbot LLM, dan layanan otomasi Nexo untuk KSM AIoT."
+site_url = "https://ksm-aiot-upnvj.github.io/nexo/"
+repo_url = "https://github.com/ksm-aiot-upnvj/nexo"
+repo_name = "nexo"
+site_author = "KSM AIoT"
+copyright = "Copyright &copy; 2026 Kelompok Studi Mahasiswa AIoT · Built by KSM AIoT"
+docs_dir = "docs"
+site_dir = "site"
+nav = [
+    { "Beranda" = "index.md" },
+    { "Panduan pengguna" = [
+        { "Mulai menggunakan Nexo" = "getting-started.md" },
+        { "Command" = "commands.md" },
+    ] },
+    { "Developer" = [
+        { "Arsitektur umum" = "architecture.md" },
+        { "Auto scheduling" = "scheduling.md" },
+        { "Chatbot LLM" = "llm.md" },
+        { "Tools Discord" = "discord-tools.md" },
+        { "GitHub Webhook" = "github-webhook.md" },
+    ] },
+]
+
+[project.theme]
+language = "id"
+features = [
+    "navigation.tabs",
+    "navigation.sections",
+    "navigation.footer",
+    "content.code.copy",
+]
+
+[[project.theme.palette]]
+scheme = "default"
+primary = "blue"
+accent = "light blue"
+toggle.icon = "lucide/sun"
+toggle.name = "Beralih ke mode gelap"
+
+[[project.theme.palette]]
+scheme = "slate"
+primary = "blue"
+accent = "light blue"
+toggle.icon = "lucide/moon"
+toggle.name = "Beralih ke mode terang"
+
+[project.markdown_extensions]
+admonition = {}
+attr_list = {}
+"pymdownx.highlight" = { anchor_linenums = true, line_spans = "__span", use_pygments = true }
+"pymdownx.superfences" = {}
+
+[[project.extra.social]]
+icon = "fontawesome/brands/github"
+link = "https://github.com/ksm-aiot-upnvj/nexo"
+name = "Nexo di GitHub"
+
+[project.markdown_extensions.pymdownx.superfences]
+custom_fences = [
+  { name = "mermaid", class = "mermaid", format = "pymdownx.superfences.fence_code_format" },
+]
