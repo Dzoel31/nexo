@@ -38,15 +38,18 @@ Jawaban ditampilkan sebagai embed Discord dengan durasi proses dan informasi tok
 `LLM_BASE_URL` harus menunjuk ke endpoint OpenAI-compatible provider, misalnya:
 
 ```env
+# Azure OpenAI-compatible endpoint
 LLM_BASE_URL=https://latihan-azure-1.services.ai.azure.com/openai/v1
 LLM_API_KEY=your-api-key
 LLM_MODEL_NAME=your-deployed-model
 ```
 
-Token counting tidak lagi memanggil endpoint Responses `input_tokens` secara
-otomatis karena endpoint itu tidak tersedia di semua provider, termasuk sebagian
-Azure Foundry deployments. Jika provider memiliki endpoint tokenizer sendiri,
-atur `LLM_TOKENIZE_URL`; jika tidak, Nexo menggunakan estimasi lokal.
+Untuk self-hosted LiteLLM gateway, `LLM_BASE_URL` dapat menunjuk ke route
+gateway, misalnya `https://aiot.fik.upnvj.ac.id/gateway/v1`. Nexo mengambil
+`tokenizer_with_hf_repo` dari `/gateway/v1/model/info?model=<LLM_MODEL_NAME>`
+dan menghitung token dengan tokenizer Hugging Face tersebut. Provider Azure
+tidak memerlukan metadata gateway; nama model deployment dipakai untuk memilih
+tokenizer lokal yang sesuai.
 
 Status provider memanggil endpoint `/models` melalui library `openai` /
 `AsyncOpenAI`. Dengan begitu, pengecekan tidak perlu menghasilkan output model

@@ -39,10 +39,6 @@ class Settings(BaseSettings):
         default="http://litellm-gateway:4000/v1",
         validation_alias="LLM_BASE_URL",
     )
-    LLM_TOKENIZE_URL: str = Field(
-        default="",
-        validation_alias="LLM_TOKENIZE_URL",
-    )
     LLM_API_KEY: str = Field(default="", validation_alias="LLM_API_KEY")
     LLM_MODEL_NAME: str = Field(
         default="gemma-4-e2b-qat-q4_0-it",
