@@ -33,7 +33,7 @@ async def save_message(
 
 
 async def get_conversation_context(
-    user_id: int, channel_id: int | None = None
+    user_id: int, channel_id: int | None
 ) -> tuple[str | None, list[dict], int]:
     """Build a token-budgeted LLM context from persisted conversation rows."""
 
@@ -83,7 +83,8 @@ async def get_conversation_context(
 async def check_and_trigger_rolling_summary(
     user_id: int,
     ai_client,
-    channel_id: int | None = None,
+    *,
+    channel_id: int | None,
     on_compaction_start=None,
     on_compaction_end=None,
 ):

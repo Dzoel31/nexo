@@ -14,7 +14,7 @@ CONVERSATION_TTL = timedelta(hours=24)
 
 
 async def get_or_create_conversation(
-    user_id: int, channel_id: int | None = None
+    user_id: int, channel_id: int | None
 ) -> ConversationRead:
     """
     Getting an active conversation based on user_id or creating a new one using raw SQL.
@@ -194,7 +194,7 @@ async def persist_message(
         )
 
 
-async def reset_conversation_history(user_id: int, channel_id: int | None = None):
+async def reset_conversation_history(user_id: int, channel_id: int | None):
     """Delete one user's conversation and summary for the selected channel."""
     async with async_session() as session:
         delete_sql = text("""
