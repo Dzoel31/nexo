@@ -712,7 +712,9 @@ class ServerEvents(EventLifecycleMixin, VoiceChannelMixin, commands.Cog):
     async def find_server_members_handler(self, arguments: dict, ctx_obj=None):
         try:
             if not ctx_obj or not getattr(ctx_obj, "guild", None):
-                return "❌ Cannot search members because the server context was not found."
+                return (
+                    "❌ Cannot search members because the server context was not found."
+                )
 
             schema = FindServerMembersSchema.model_validate(arguments)
             query = schema.query.strip().casefold()
@@ -780,7 +782,10 @@ class ServerEvents(EventLifecycleMixin, VoiceChannelMixin, commands.Cog):
                 return "❌ DENIED: You do not have permission to send messages in this channel."
 
             schema = NotifyMemberSchema.model_validate(arguments)
-            if "@everyone" in schema.message.casefold() or "@here" in schema.message.casefold():
+            if (
+                "@everyone" in schema.message.casefold()
+                or "@here" in schema.message.casefold()
+            ):
                 return "❌ Mentions to @everyone and @here are not allowed."
 
             member = ctx_obj.guild.get_member(schema.member_id)
@@ -802,7 +807,9 @@ class ServerEvents(EventLifecycleMixin, VoiceChannelMixin, commands.Cog):
             )
             return f"✅ Message sent to {member.display_name}."
         except discord.Forbidden:
-            return "❌ The bot does not have permission to send messages in this channel."
+            return (
+                "❌ The bot does not have permission to send messages in this channel."
+            )
         except Exception as e:  # noqa: BLE001
             logger.error(f"Error in notify_member_handler: {e}")
             return f"❌ Failed to notify member: {e!s}"

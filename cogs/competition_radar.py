@@ -46,7 +46,7 @@ def parse_deadline_wib(deadline_str: str) -> datetime | None:
     )
     for fmt in formats:
         try:
-            dt = datetime.strptime(deadline_str.strip(), fmt)  # noqa: DTZ007
+            dt = datetime.strptime(deadline_str.strip(), fmt)
             if fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y"):
                 # Default end of day: 23:59 WIB
                 dt = dt.replace(hour=23, minute=59, second=59)

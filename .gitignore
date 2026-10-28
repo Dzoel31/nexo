@@ -182,3 +182,5 @@ data*
 scratch*
 credentials*
 *.json
+scripts*
+reports*

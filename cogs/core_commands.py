@@ -347,7 +347,7 @@ def parse_scheduled_time(text: str) -> tuple[datetime | None, str]:
                 "%Y/%m/%d %H:%M",
             ):
                 try:
-                    dt = datetime.strptime(raw_time_str, fmt)  # noqa: DTZ007
+                    dt = datetime.strptime(raw_time_str, fmt)
                     parsed_dt = dt.replace(tzinfo=WIB)
                     break
                 except ValueError:
@@ -356,7 +356,7 @@ def parse_scheduled_time(text: str) -> tuple[datetime | None, str]:
             # Try time only format (HH:MM)
             if not parsed_dt:
                 try:
-                    t_only = datetime.strptime(raw_time_str, "%H:%M").time()  # noqa: DTZ007
+                    t_only = datetime.strptime(raw_time_str, "%H:%M").time()
                     cand = datetime.combine(now_wib.date(), t_only).replace(tzinfo=WIB)
                     if cand <= now_wib:
                         cand += timedelta(days=1)
@@ -807,7 +807,9 @@ class CoreCommands(commands.Cog):
         pesan="Isi pesan yang ingin dikirim",
     )
     @app_commands.checks.cooldown(
-        1, 10.0, key=lambda interaction: (interaction.guild_id or 0, interaction.user.id)
+        1,
+        10.0,
+        key=lambda interaction: (interaction.guild_id or 0, interaction.user.id),
     )
     async def tag_member(
         self,

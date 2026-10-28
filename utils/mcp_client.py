@@ -329,7 +329,7 @@ async def process_with_mcp_tools(
 
     messages.extend(recent_messages)
 
-    current_time_str = datetime.now().strftime("%A, %d %B %Y - %H:%M WIB")  # noqa: DTZ005
+    current_time_str = datetime.now().strftime("%A, %d %B %Y - %H:%M WIB")
 
     # Extract Channel & Voice Channel info from ctx_obj
     channel_name = "Unknown"
