@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 import time
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import aiohttp
 import discord
@@ -21,6 +21,7 @@ from db.repository import (
 )
 
 logger = logging.getLogger("mcp_client")
+WIB = timezone(timedelta(hours=7))
 
 # ---------------------------------------------------------
 # CONFIGURATION & CONSTANTS
@@ -177,16 +178,18 @@ async def get_tools_from_mcp_server() -> list:
                             }
 
                         if name:
-                            llm_tools.append(
-                                {
-                                    "type": "function",
-                                    "function": {
-                                        "name": name,
-                                        "description": desc,
-                                        "parameters": parameters,
-                                    },
-                                }
-                            )
+                            llm_tool = {
+                                "type": "function",
+                                "function": {
+                                    "name": name,
+                                    "description": desc,
+                                    "parameters": parameters,
+                                },
+                            }
+                            annotations = _get_field(tool, "annotations")
+                            if _get_field(annotations, "readOnlyHint") is True:
+                                llm_tool["readOnlyHint"] = True
+                            llm_tools.append(llm_tool)
 
                     return llm_tools
         except Exception as e:  # noqa: BLE001
@@ -292,6 +295,83 @@ async def check_llm_health():
     return True, "LLM provider is online"
 
 
+async def _run_tool_handler(bot, tool_name: str, arguments: dict, ctx_obj) -> str:
+    """Run one local or MCP handler and normalize its result for the LLM."""
+    if hasattr(bot, "local_tool_handlers") and tool_name in bot.local_tool_handlers:
+        import inspect
+
+        handler = bot.local_tool_handlers[tool_name]
+        sig = inspect.signature(handler)
+        if "ctx_obj" in sig.parameters:
+            result = await handler(arguments, ctx_obj=ctx_obj)
+        else:
+            result = await handler(arguments)
+    else:
+        result = await execute_mcp_tool(tool_name, arguments)
+
+    if isinstance(result, (dict, list)):
+        return json.dumps(result, ensure_ascii=False)
+    return result if isinstance(result, str) else str(result)
+
+
+async def _run_tool_handler_safely(bot, tool_name: str, arguments: dict, ctx_obj):
+    try:
+        return await _run_tool_handler(bot, tool_name, arguments, ctx_obj)
+    except Exception:
+        logger.exception("Unhandled exception executing tool '%s'", tool_name)
+        return (
+            f"Gagal mengeksekusi fungsi '{tool_name}' karena kendala internal. "
+            "Harap beri tahu pengguna untuk mencoba sesaat lagi."
+        )
+
+
+async def _execute_tool_calls(
+    bot, calls: list[dict], parallel_safe_tools: set, ctx_obj
+):
+    """Run adjacent read-only calls concurrently and preserve call order."""
+    results = [None] * len(calls)
+    index = 0
+    while index < len(calls):
+        call = calls[index]
+        if call["error"] is not None:
+            results[index] = (
+                "Error: Format argumen JSON tidak valid "
+                f"({call['error']}). Harap gunakan JSON yang valid."
+            )
+            index += 1
+            continue
+
+        if call["tool_name"] in parallel_safe_tools:
+            batch_end = index + 1
+            while (
+                batch_end < len(calls)
+                and calls[batch_end]["error"] is None
+                and calls[batch_end]["tool_name"] in parallel_safe_tools
+            ):
+                batch_end += 1
+            results[index:batch_end] = await asyncio.gather(
+                *(
+                    _run_tool_handler_safely(
+                        bot,
+                        item["tool_name"],
+                        item["arguments"],
+                        ctx_obj,
+                    )
+                    for item in calls[index:batch_end]
+                )
+            )
+            index = batch_end
+        else:
+            results[index] = await _run_tool_handler_safely(
+                bot,
+                call["tool_name"],
+                call["arguments"],
+                ctx_obj,
+            )
+            index += 1
+    return results
+
+
 async def process_with_mcp_tools(
     bot,
     user_id: int,
@@ -313,7 +393,9 @@ async def process_with_mcp_tools(
     )
     conv = await get_or_create_conversation(user_id, channel_id)
 
-    summary, recent_messages, _history_tokens = await get_conversation_context(user_id)
+    summary, recent_messages, _history_tokens = await get_conversation_context(
+        user_id, channel_id
+    )
 
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -329,7 +411,7 @@ async def process_with_mcp_tools(
 
     messages.extend(recent_messages)
 
-    current_time_str = datetime.now().strftime("%A, %d %B %Y - %H:%M WIB")
+    current_time_str = datetime.now(WIB).strftime("%A, %d %B %Y - %H:%M WIB")
 
     # Extract Channel & Voice Channel info from ctx_obj
     channel_name = "Unknown"
@@ -377,6 +459,19 @@ async def process_with_mcp_tools(
             all_tools.extend(bot.ai_tools)
         if getattr(bot, "cached_mcp_tools", None):
             all_tools.extend(bot.cached_mcp_tools)
+        local_tool_names = set(getattr(bot, "local_tool_handlers", {}))
+        local_tools = getattr(bot, "ai_tools", [])
+        parallel_safe_tools = {
+            tool["function"]["name"]
+            for tool in local_tools
+            if tool.get("readOnlyHint") is True
+        }
+        parallel_safe_tools.update(
+            tool["function"]["name"]
+            for tool in getattr(bot, "cached_mcp_tools", [])
+            if tool.get("readOnlyHint") is True
+            and tool["function"]["name"] not in local_tool_names
+        )
 
         kwargs = {
             "model": LLM_MODEL_NAME,
@@ -408,11 +503,10 @@ async def process_with_mcp_tools(
                 used_tools = True
                 messages.append(message)
 
+                calls = []
                 for tool_call in message.tool_calls:
                     tool_name = tool_call.function.name
                     args = tool_call.function.arguments
-                    arguments = {}
-
                     if isinstance(args, str):
                         try:
                             arguments = json.loads(args) if args.strip() else {}
@@ -420,48 +514,39 @@ async def process_with_mcp_tools(
                             logger.warning(
                                 f"Malformed JSON arguments from model for tool '{tool_name}': {args} | Error: {json_err}"
                             )
-                            messages.append(
+                            calls.append(
                                 {
-                                    "role": "tool",
-                                    "tool_call_id": tool_call.id,
-                                    "name": tool_name,
-                                    "content": f"Error: Format argumen JSON tidak valid ({json_err}). Harap gunakan JSON yang valid.",
+                                    "tool_call": tool_call,
+                                    "tool_name": tool_name,
+                                    "arguments": None,
+                                    "error": json_err,
                                 }
                             )
                             continue
                     elif isinstance(args, dict):
                         arguments = args
+                    else:
+                        arguments = {}
 
                     logger.info(f"Executing tool: {tool_name} with args: {arguments}")
+                    calls.append(
+                        {
+                            "tool_call": tool_call,
+                            "tool_name": tool_name,
+                            "arguments": arguments,
+                            "error": None,
+                        }
+                    )
 
-                    try:
-                        if (
-                            hasattr(bot, "local_tool_handlers")
-                            and tool_name in bot.local_tool_handlers
-                        ):
-                            import inspect
+                # Only explicitly read-only tools are run concurrently. Keep
+                # mutations and unknown MCP tools ordered as requested.
+                results = await _execute_tool_calls(
+                    bot, calls, parallel_safe_tools, ctx_obj
+                )
 
-                            handler = bot.local_tool_handlers[tool_name]
-                            sig = inspect.signature(handler)
-                            if "ctx_obj" in sig.parameters:
-                                result = await handler(arguments, ctx_obj=ctx_obj)
-                            else:
-                                result = await handler(arguments)
-                        else:
-                            result = await execute_mcp_tool(tool_name, arguments)
-                    except Exception:
-                        logger.exception(
-                            "Unhandled exception executing tool '%s'", tool_name
-                        )
-                        result = f"Gagal mengeksekusi fungsi '{tool_name}' karena kendala internal. Harap beri tahu pengguna untuk mencoba sesaat lagi."
-
-                    # Ensure result is always a string for OpenAI API message content
-                    if not isinstance(result, str):
-                        result = (
-                            json.dumps(result, ensure_ascii=False)
-                            if isinstance(result, (dict, list))
-                            else str(result)
-                        )
+                for call, result in zip(calls, results, strict=True):
+                    tool_call = call["tool_call"]
+                    tool_name = call["tool_name"]
 
                     messages.append(
                         {

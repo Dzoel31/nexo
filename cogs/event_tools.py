@@ -32,6 +32,14 @@ TOOL_NAMES = {
     "notify_member",
 }
 
+READ_ONLY_TOOL_NAMES = {
+    "list_discord_events",
+    "get_server_channels",
+    "get_server_roles",
+    "check_voice_channel",
+    "find_server_members",
+}
+
 
 def register_event_tools(
     bot: Any,
@@ -116,6 +124,7 @@ def register_event_tools(
         bot.ai_tools.append(
             {
                 "type": "function",
+                "readOnlyHint": name in READ_ONLY_TOOL_NAMES,
                 "function": {
                     "name": name,
                     "description": description,
