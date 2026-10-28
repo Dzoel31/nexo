@@ -38,14 +38,27 @@ async def test_conversation_sliding_ttl():
         assert conv is not None
         assert conv.user_id == test_user_id
 
+        other_channel_conv = await get_or_create_conversation(
+            test_user_id, channel_id + 1
+        )
+        assert other_channel_conv.id != conv.id
+
         # 3. Add test messages
         await save_message(conv.id, MessageRole.USER, "Halo Nexo! Tes 1 2 3.")
         await save_message(conv.id, MessageRole.ASSISTANT, "Halo! Nexo siap membantu.")
 
         # 4. Context within TTL should be active
-        _summary, messages, total_tokens = await get_conversation_context(test_user_id)
+        _summary, messages, total_tokens = await get_conversation_context(
+            test_user_id, channel_id
+        )
         assert len(messages) == 2
         assert total_tokens > 0
+
+        _other_summary, other_messages, other_tokens = await get_conversation_context(
+            test_user_id, channel_id + 1
+        )
+        assert other_messages == []
+        assert other_tokens == 0
 
         # 5. Simulate 25 hours of inactivity (> 24h CONVERSATION_TTL)
         past_time = datetime.now(UTC) - (CONVERSATION_TTL + timedelta(hours=1))
@@ -60,7 +73,7 @@ async def test_conversation_sliding_ttl():
 
         # 6. Context should be automatically reset to 0 tokens / 0 messages
         summary_exp, messages_exp, tokens_exp = await get_conversation_context(
-            test_user_id
+            test_user_id, channel_id
         )
         assert summary_exp is None
         assert len(messages_exp) == 0

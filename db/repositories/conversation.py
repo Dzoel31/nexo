@@ -26,9 +26,12 @@ async def get_or_create_conversation(
             SELECT id, user_id, channel_id, summary, created_at, updated_at
             FROM conversations
             WHERE user_id = :user_id
+              AND channel_id IS NOT DISTINCT FROM :channel_id
             LIMIT 1
         """)
-        result = await session.execute(select_sql, {"user_id": user_id})
+        result = await session.execute(
+            select_sql, {"user_id": user_id, "channel_id": channel_id}
+        )
         row = result.mappings().first()
 
         if not row:
@@ -80,7 +83,7 @@ async def get_or_create_conversation(
                 await session.execute(
                     text("""
                         UPDATE conversations
-                        SET summary = NULL, updated_at = :now_utc, channel_id = COALESCE(:channel_id, channel_id)
+                        SET summary = NULL, updated_at = :now_utc
                         WHERE id = :conv_id
                     """),
                     {
@@ -93,18 +96,18 @@ async def get_or_create_conversation(
                 return ConversationRead(
                     id=conv_id,
                     user_id=row["user_id"],
-                    channel_id=channel_id or row["channel_id"],
+                    channel_id=row["channel_id"],
                     summary=None,
                     created_at=row["created_at"],
                     updated_at=now_utc,
                     messages=[],
                 )
 
-        # Active conversation: update last_activity and channel_id
+        # Active conversation: update last_activity for this user/channel pair.
         await session.execute(
             text("""
                 UPDATE conversations
-                SET updated_at = :now_utc, channel_id = COALESCE(:channel_id, channel_id)
+                SET updated_at = :now_utc
                 WHERE id = :conv_id
             """),
             {
@@ -117,7 +120,7 @@ async def get_or_create_conversation(
         return ConversationRead(
             id=conv_id,
             user_id=row["user_id"],
-            channel_id=channel_id or row["channel_id"],
+            channel_id=row["channel_id"],
             summary=row["summary"],
             created_at=row["created_at"],
             updated_at=now_utc,
@@ -191,19 +194,22 @@ async def persist_message(
         )
 
 
-async def reset_conversation_history(user_id: int):
-    """Deleting entire conversation and user summary (command $reset / /reset) using raw SQL."""
+async def reset_conversation_history(user_id: int, channel_id: int | None = None):
+    """Delete one user's conversation and summary for the selected channel."""
     async with async_session() as session:
         delete_sql = text("""
             DELETE FROM conversations
             WHERE user_id = :user_id
+              AND channel_id IS NOT DISTINCT FROM :channel_id
         """)
-        await session.execute(delete_sql, {"user_id": user_id})
+        await session.execute(
+            delete_sql, {"user_id": user_id, "channel_id": channel_id}
+        )
         await session.commit()
         logger.info(f"Reset conversation history for user {user_id}")
 
 
-async def _with_context_data(user_id: int, consume):
+async def _with_context_data(user_id: int, channel_id: int | None, consume):
     """Load context rows and consume them while the original read session is open."""
     now_utc = datetime.now(UTC)
     async with async_session() as session:
@@ -211,9 +217,12 @@ async def _with_context_data(user_id: int, consume):
             SELECT id, summary, updated_at
             FROM conversations
             WHERE user_id = :user_id
+              AND channel_id IS NOT DISTINCT FROM :channel_id
             LIMIT 1
         """)
-        conv_res = await session.execute(conv_sql, {"user_id": user_id})
+        conv_res = await session.execute(
+            conv_sql, {"user_id": user_id, "channel_id": channel_id}
+        )
         conv_row = conv_res.mappings().first()
         if not conv_row:
             return await consume(None, [])
@@ -250,16 +259,19 @@ async def _with_context_data(user_id: int, consume):
         return await consume(conv_row["summary"], msgs_res.mappings().all())
 
 
-async def _compact_conversation(user_id: int, compact):
+async def _compact_conversation(user_id: int, channel_id: int | None, compact):
     """Keep query and persistence in the repository while a service compacts rows."""
     async with async_session() as session:
         conv_sql = text("""
             SELECT id, summary
             FROM conversations
             WHERE user_id = :user_id
+              AND channel_id IS NOT DISTINCT FROM :channel_id
             LIMIT 1
         """)
-        conv_res = await session.execute(conv_sql, {"user_id": user_id})
+        conv_res = await session.execute(
+            conv_sql, {"user_id": user_id, "channel_id": channel_id}
+        )
         conv_row = conv_res.mappings().first()
         if not conv_row:
             return

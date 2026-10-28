@@ -32,7 +32,9 @@ async def save_message(
     return await persist_message(conversation_id, role, content, token_count)
 
 
-async def get_conversation_context(user_id: int) -> tuple[str | None, list[dict], int]:
+async def get_conversation_context(
+    user_id: int, channel_id: int | None = None
+) -> tuple[str | None, list[dict], int]:
     """Build a token-budgeted LLM context from persisted conversation rows."""
 
     async def build_context(summary, sorted_messages):
@@ -75,11 +77,15 @@ async def get_conversation_context(user_id: int) -> tuple[str | None, list[dict]
         )
         return summary, payloads, current_tokens
 
-    return await _with_context_data(user_id, build_context)
+    return await _with_context_data(user_id, channel_id, build_context)
 
 
 async def check_and_trigger_rolling_summary(
-    user_id: int, ai_client, on_compaction_start=None, on_compaction_end=None
+    user_id: int,
+    ai_client,
+    channel_id: int | None = None,
+    on_compaction_start=None,
+    on_compaction_end=None,
 ):
     """Compact old conversation messages and persist the generated rolling summary."""
     end_callback_required = False
@@ -163,7 +169,7 @@ async def check_and_trigger_rolling_summary(
             return None
 
     try:
-        result = await _compact_conversation(user_id, compact)
+        result = await _compact_conversation(user_id, channel_id, compact)
         if result:
             logger.info(
                 "Rolling summary completed for user %s. Summarized & purged %s messages (~%s tokens saved).",

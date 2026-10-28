@@ -674,10 +674,13 @@ class CoreCommands(commands.Cog):
                 self.bot.conversation_history.clear()
             msg = "Global AI conversation memory context has been cleared for all users! 🧹✨"
         else:
-            await reset_conversation_history(ctx.author.id)
+            await reset_conversation_history(ctx.author.id, ctx.channel.id)
             if hasattr(self.bot, "conversation_history"):
                 self.bot.conversation_history.pop(ctx.author.id, None)
-            msg = f"AI conversation memory context cleared for <@{ctx.author.id}>! 🧹✨"
+            msg = (
+                f"AI conversation memory context cleared for <@{ctx.author.id}> "
+                f"in this channel! 🧹✨"
+            )
 
         embed = discord.Embed(
             title="🧠 Context Reset",
@@ -691,13 +694,16 @@ class CoreCommands(commands.Cog):
     )
     async def reset_slash(self, interaction: discord.Interaction):
         user_id = interaction.user.id
-        await reset_conversation_history(user_id)
+        await reset_conversation_history(user_id, interaction.channel_id)
         if hasattr(self.bot, "conversation_history"):
             self.bot.conversation_history.pop(user_id, None)
 
         embed = discord.Embed(
             title="🧠 Context Reset",
-            description=f"AI conversation memory context cleared for <@{user_id}>! 🧹✨",
+            description=(
+                f"AI conversation memory context cleared for <@{user_id}> "
+                "in this channel! 🧹✨"
+            ),
             color=discord.Color.blue(),
         )
         await interaction.response.send_message(embed=embed)

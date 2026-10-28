@@ -259,6 +259,7 @@ class AgentOrchestrator(commands.Cog):
                                 check_and_trigger_rolling_summary(
                                     user_id,
                                     ai_client,
+                                    channel_id=getattr(channel, "id", None),
                                     on_compaction_start=on_compaction_start,
                                     on_compaction_end=on_compaction_end,
                                 )

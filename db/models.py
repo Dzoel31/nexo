@@ -9,10 +9,13 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -28,6 +31,15 @@ class MessageRole(str, enum.Enum):
 
 class Conversation(Base):
     __tablename__ = "conversations"
+    __table_args__ = (
+        UniqueConstraint("user_id", "channel_id", name="uq_conversations_user_channel"),
+        Index(
+            "uq_conversations_user_channel_null",
+            "user_id",
+            unique=True,
+            postgresql_where=text("channel_id IS NULL"),
+        ),
+    )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid7)
     user_id: Mapped[int] = mapped_column(BigInteger, index=True, nullable=False)
