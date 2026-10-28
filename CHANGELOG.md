@@ -2,6 +2,45 @@
 
 <!-- version list -->
 
+## v1.18.0 (2026-10-28)
+
+### Bug Fixes
+
+- **conversation**: Scope memory by user and channel
+  ([`9b960d2`](https://github.com/ksm-aiot-upnvj/nexo/commit/9b960d205dfe1a11697d73c78220efce8e65d014))
+
+- **db**: Use UUIDv7 for time-based records
+  ([`b8c330e`](https://github.com/ksm-aiot-upnvj/nexo/commit/b8c330e77beb4409441d70dc40ef9c864bc22118))
+
+- **llm**: Correct context time and parallelize safe tools
+  ([`29c9454`](https://github.com/ksm-aiot-upnvj/nexo/commit/29c9454c45bf6a34abe3576fc25919d6966c96e4))
+
+- **onboarding**: Constrain identity input length
+  ([`cef53df`](https://github.com/ksm-aiot-upnvj/nexo/commit/cef53df4336719e695258310138913ef67fc661c))
+
+### Documentation
+
+- Align deployment and runtime guidance
+  ([`542692b`](https://github.com/ksm-aiot-upnvj/nexo/commit/542692b2261aa076001f4fd58fb2731b8dc6d847))
+
+- **discord**: Document member search and tagging
+  ([`17ed3dc`](https://github.com/ksm-aiot-upnvj/nexo/commit/17ed3dc4e3bab6f8fc8885e911ccdb2c853e44f7))
+
+- **prompt**: Clarify tool-use behavior
+  ([`c8bbbe7`](https://github.com/ksm-aiot-upnvj/nexo/commit/c8bbbe74db9f7bb3fadc16ea945d385547ee0c2d))
+
+### Features
+
+- **commands**: Add detailed command help and reset history
+  ([`51afa0c`](https://github.com/ksm-aiot-upnvj/nexo/commit/51afa0cee37df8837284928a4144a4125d66796b))
+
+- **discord**: Add safe member search and tagging
+  ([`4cbf701`](https://github.com/ksm-aiot-upnvj/nexo/commit/4cbf7019418eb2710a1938ebde40729ca249537c))
+
+- **llm**: Add local model-aware token counting
+  ([`0422385`](https://github.com/ksm-aiot-upnvj/nexo/commit/0422385647ebdf1a7f8c1791d8d240a586cc96ce))
+
+
 ## v1.17.1 (2026-10-25)
 
 ### Bug Fixes
