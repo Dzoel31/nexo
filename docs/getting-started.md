@@ -45,7 +45,7 @@ Pesan dikirim di channel tempat command dijalankan. Jika menggunakan percakapan 
 | Memeriksa bot | `$ping` | `$ping` |
 | Melihat tools yang aktif | `$tools` atau `/tools` | `$tools` |
 | Melihat daftar channel | Mention Nexo atau `/tanya` | `Nexo, tampilkan daftar channel di server.` |
-| Mencari akun member | Mention Nexo atau `/tanya` | `Nexo, siapa itu Dzul?` |
+| Mencari akun member | Mention Nexo atau `/tanya` | `Nexo, siapa itu John Doe?` |
 | Mengirim pesan dengan tag | `/tag` | `/tag target:@Cocolele pesan:"Tolong mandi!"` |
 | Melihat anggota voice channel | `$voice` atau `/voice` | `$voice Lab IoT` |
 | Menghapus ingatan percakapan | `$reset` atau `/reset` | `$reset` |
