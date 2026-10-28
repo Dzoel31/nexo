@@ -230,28 +230,11 @@ async def execute_mcp_tool(tool_name: str, arguments: dict) -> str:
 async def check_services_health():
     """Returns True if both services are up, False and an error message otherwise."""
     try:
-        async with aiohttp.ClientSession() as session:
-            # Check llama-server
-            try:
-                async with session.get(
-                    f"{LLM_BASE_URL.replace('/v1', '')}/health/liveness",
-                    timeout=aiohttp.ClientTimeout(total=2),
-                ) as response:
-                    if response.status != 200:
-                        logger.error(
-                            f"llama-server health check failed with response: {response.status}"
-                        )
-                        return (
-                            False,
-                            f"**llama-server** responded with an error ({response.status}).",
-                        )
-            except Exception as e:  # noqa: BLE001
-                logger.warning("llama-server health check failed: %s", e)
-                return (
-                    False,
-                    f"**llama-server** is OFFLINE. Please start the LLM server. Error: {e}",
-                )
+        llm_ok, llm_message = await check_llm_health()
+        if not llm_ok:
+            return False, llm_message
 
+        async with aiohttp.ClientSession() as session:
             # Check MCP server
             try:
                 mcp_ok = False
@@ -295,32 +278,18 @@ async def check_services_health():
 
 
 async def check_llm_health():
-    """Check only the LLM required to answer a normal conversation."""
+    """Check the configured provider through its OpenAI-compatible models API."""
     try:
-        async with (
-            aiohttp.ClientSession() as session,
-            session.get(
-                f"{LLM_BASE_URL.replace('/v1', '')}/health/liveness",
-                timeout=aiohttp.ClientTimeout(total=2),
-            ) as response,
-        ):
-            if response.status != 200:
-                logger.error(
-                    "llama-server health check failed with response: %s",
-                    response.status,
-                )
-                return (
-                    False,
-                    f"**llama-server** responded with an error ({response.status}).",
-                )
+        client = ai_client.with_options(timeout=2.0)
+        await client.models.list()
     except Exception as error:  # noqa: BLE001
-        logger.warning("llama-server health check failed: %s", error)
+        logger.warning("LLM provider health check failed: %s", error)
         return (
             False,
-            f"**llama-server** is OFFLINE. Please start the LLM server. Error: {error}",
+            f"**LLM provider** is unavailable. Error: {error}",
         )
 
-    return True, "LLM server is online"
+    return True, "LLM provider is online"
 
 
 async def process_with_mcp_tools(
@@ -414,11 +383,14 @@ async def process_with_mcp_tools(
             "messages": messages,
             "temperature": 0.7,
             "top_p": 0.95,
-            "max_tokens": 1024,
+            "max_completion_tokens": 1024,
         }
         # On the last iteration, omit tools to force the model to summarize existing data into text
         if all_tools and iteration < (max_iterations - 1):
             kwargs["tools"] = sanitize_tools_list(all_tools)
+            # Chat Completions providers reject reasoning models with tools
+            # unless reasoning is explicitly disabled.
+            kwargs["reasoning_effort"] = "none"
 
         try:
             response = await ai_client.chat.completions.create(**kwargs)

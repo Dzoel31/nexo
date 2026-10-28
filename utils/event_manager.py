@@ -280,7 +280,7 @@ async def generate_dynamic_event_message(
                     {"role": "system", "content": system_instruction},
                     {"role": "user", "content": user_prompt},
                 ],
-                max_tokens=150,
+                max_completion_tokens=150,
                 temperature=0.3,
             )
             if response.choices and response.choices[0].message.content:

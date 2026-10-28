@@ -40,7 +40,7 @@ class Settings(BaseSettings):
         validation_alias="LLM_BASE_URL",
     )
     LLM_TOKENIZE_URL: str = Field(
-        default="http://llama-cpp-server:8080/tokenize",
+        default="",
         validation_alias="LLM_TOKENIZE_URL",
     )
     LLM_API_KEY: str = Field(default="", validation_alias="LLM_API_KEY")

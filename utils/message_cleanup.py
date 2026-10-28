@@ -55,7 +55,10 @@ async def slow_purge(
             recent_messages = []
 
         await wait_between_requests()
-        await message.delete(reason=reason)
+        if isinstance(message, discord.PartialMessage):
+            await message.delete()
+        else:
+            await message.delete(reason=reason)
         deleted.append(message)
 
     if recent_messages:

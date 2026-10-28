@@ -59,7 +59,11 @@ async def get_conversation_context(user_id: int) -> tuple[str | None, list[dict]
         payloads = []
         for msg, _ in recent_selected:
             raw_role = msg["role"]
-            role_str = raw_role.value if hasattr(raw_role, "value") else str(raw_role)
+            role_str = (
+                raw_role.value if hasattr(raw_role, "value") else str(raw_role)
+            ).lower()
+            if role_str not in {"system", "user", "assistant", "tool"}:
+                raise ValueError(f"Unsupported persisted message role: {raw_role!r}")
             payloads.append(
                 LLMMessagePayload(role=role_str, content=msg["content"]).model_dump()
             )
@@ -141,7 +145,7 @@ async def check_and_trigger_rolling_summary(
             response = await ai_client.chat.completions.create(
                 model="local-model",
                 messages=summarize_prompt,
-                max_tokens=400,
+                max_completion_tokens=400,
                 temperature=0.3,
             )
             new_summary = response.choices[0].message.content.strip()
