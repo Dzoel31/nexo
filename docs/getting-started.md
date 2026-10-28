@@ -16,6 +16,26 @@ Nexo, siapa saja yang sedang ada di voice channel Lab IoT?
 
 Nexo akan mencoba memahami permintaan tersebut dan memilih bantuan yang sesuai. Untuk membuat agenda, sertakan tanggal, jam, topik, dan lokasi agar Nexo tidak perlu menebak.
 
+## Mencari dan men-tag member
+
+Kamu dapat meminta Nexo mencari akun berdasarkan username, display name, global name, atau nickname:
+
+```text
+Nexo, siapa itu John Doe?
+```
+
+Nexo hanya menampilkan maksimal lima kandidat yang cocok. Pencarian ini tidak mengirim mention dan tidak mengirim pesan kepada siapa pun.
+
+Untuk mengirim pesan kepada member tertentu, gunakan `/tag` dan pilih target langsung dari daftar member Discord:
+
+```text
+/tag target:@User pesan:"Tolong jangan lupa mandi!"
+```
+
+Ganti `@User` dengan mention member yang ingin ditag. Jika kamu ingin men-tag beberapa member, buat command `/tag` terpisah untuk masing-masing target.
+
+Pesan dikirim di channel tempat command dijalankan. Jika menggunakan percakapan AI, Nexo hanya boleh mengirim pesan ketika kamu secara jelas meminta Nexo untuk men-tag atau memberi tahu seseorang. Jika ada beberapa akun yang cocok, Nexo akan meminta kamu memilih target terlebih dahulu.
+
 ## Command yang sering dipakai
 
 | Kebutuhan | Gunakan | Contoh |
@@ -24,6 +44,9 @@ Nexo akan mencoba memahami permintaan tersebut dan memilih bantuan yang sesuai. 
 | Bertanya kepada Nexo | `/tanya` atau mention | `/tanya pertanyaan: Apa kabar project hidroponik?` |
 | Memeriksa bot | `$ping` | `$ping` |
 | Melihat tools yang aktif | `$tools` atau `/tools` | `$tools` |
+| Melihat daftar channel | Mention Nexo atau `/tanya` | `Nexo, tampilkan daftar channel di server.` |
+| Mencari akun member | Mention Nexo atau `/tanya` | `Nexo, siapa itu Dzul?` |
+| Mengirim pesan dengan tag | `/tag` | `/tag target:@Cocolele pesan:"Tolong mandi!"` |
 | Melihat anggota voice channel | `$voice` atau `/voice` | `$voice Lab IoT` |
 | Menghapus ingatan percakapan | `$reset` atau `/reset` | `$reset` |
 
@@ -58,6 +81,38 @@ Nexo, buat rapat evaluasi besok jam 8 malam di Voice Channel Lab IoT.
 ```
 
 Jika informasi penting belum disebutkan, Nexo akan meminta detail yang kurang. Berikan tanggal, jam, topik, dan lokasi pada balasan berikutnya.
+
+## Menggunakan channel sementara
+
+Nexo menyediakan dua generator channel. Keduanya dipakai dengan cara masuk ke channel generator yang sudah disediakan oleh pengelola server. Setelah kamu masuk, Nexo membuat channel baru dan memindahkanmu ke sana.
+
+### Generator Stage
+
+Generator Stage digunakan untuk acara besar seperti podcast, seminar, presentasi, atau diskusi dengan pembicara. Saat kamu masuk ke Generator Stage, Nexo membuat Stage khusus dengan nama yang mencantumkan namamu.
+
+Pembuat stage mendapatkan izin untuk mengelola stage, memindahkan anggota, mengatur permission, dan mengatur mute member. Setelah semua orang keluar, stage sementara dihapus otomatis.
+
+### Generator Voice
+
+Generator Voice digunakan untuk diskusi kelompok, belajar bersama, rapat kecil, atau percakapan umum. Saat kamu masuk ke Generator Voice, Nexo membuat voice room khusus dan memindahkanmu ke sana.
+
+Pembuat voice room mendapatkan izin untuk mengelola room, memindahkan anggota, dan mengatur permission. Room yang sudah kosong dihapus otomatis.
+
+Kamu tidak perlu menghapus channel sementara secara manual. Jika channel masih kosong setelah bot restart, Nexo akan membersihkannya saat memulai kembali.
+
+## Melihat daftar channel server
+
+Nexo sudah memiliki kemampuan untuk menampilkan daftar channel di server melalui percakapan AI. Belum ada command `$channels` atau `/channels` khusus untuk fitur ini, jadi gunakan mention atau `/tanya`:
+
+```text
+Nexo, tampilkan semua channel yang ada di server ini.
+```
+
+```text
+/tanya pertanyaan: Tolong tampilkan daftar channel teks, voice, dan stage di server.
+```
+
+Nexo akan menampilkan nama, jenis, dan ID channel yang dapat diakses bot. Informasi ini berguna ketika kamu ingin memastikan nama channel sebelum menggunakan `$say` atau ingin menemukan channel voice tertentu.
 
 ## Jika command tidak berhasil
 

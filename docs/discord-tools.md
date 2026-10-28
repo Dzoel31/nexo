@@ -10,16 +10,27 @@ Tools lokal didaftarkan ke model sebagai function tools. Daftar yang ditampilkan
 | `create_discord_thread` | Membuat thread pada channel saat ini. |
 | `create_discord_poll` | Membuat native poll interaktif. |
 | `end_discord_poll` | Menutup poll dan mengembalikan hasil suara. |
-| `get_server_channels` | Mengambil daftar channel teks dan voice. |
+| `get_server_channels` | Mengambil daftar channel teks, voice, dan stage. |
 | `get_server_roles` | Mengambil daftar role beserta ID. |
 | `clear_messages` | Menghapus pesan secara massal. |
 | `check_voice_channel` | Menampilkan anggota dalam voice channel. |
+| `find_server_members` | Mencari kandidat member berdasarkan nama tanpa mengirim mention. |
+| `notify_member` | Mengirim pesan ke satu member berdasarkan ID yang sudah dipilih. |
 
 Nexo juga memiliki command langsung untuk sebagian fungsi tersebut, seperti `$clear`, `$voice`, `/voice`, dan `$tools`. Model menggunakan tool ketika permintaan ditulis dalam bahasa natural.
 
-## Channel voice sementara
+`get_server_channels` digunakan ketika pengguna meminta daftar channel server melalui mention atau `/tanya`. Hasilnya berisi nama, jenis, dan ID channel yang tersedia untuk bot. Tidak ada command `$channels` atau `/channels` khusus untuk fitur ini.
 
-Nexo menyediakan dua generator yang dikonfigurasi melalui `GENERATOR_CHANNEL_ID` dan `GENERATOR_STAGE_ID`. Pengguna masuk ke salah satu generator, lalu listener `on_voice_state_update` membuat channel baru di category yang sama:
+`find_server_members` hanya melakukan pencarian dan mengembalikan kandidat. Tool ini tidak mengirim mention. `notify_member` hanya digunakan saat permintaan pengguna memang meminta Nexo untuk men-tag atau memberi tahu seseorang, dan target harus berupa satu ID member yang tepat.
+
+## Channel voice dan stage sementara
+
+Nexo menyediakan dua generator yang dikonfigurasi melalui `GENERATOR_CHANNEL_ID` dan `GENERATOR_STAGE_ID`:
+
+- **Generator Voice** untuk diskusi, pembelajaran, rapat kecil, dan percakapan umum.
+- **Generator Stage** untuk podcast, seminar, presentasi, dan event besar.
+
+Pengguna masuk ke salah satu generator, lalu listener `on_voice_state_update` membuat channel baru di category yang sama:
 
 - voice biasa diberi nama `🔒 <nama pengguna>'s Room`;
 - stage diberi nama `🎙 <nama pengguna>'s Stage`.

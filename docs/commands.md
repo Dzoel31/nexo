@@ -12,6 +12,7 @@ Nexo menerima command dengan awalan `$` dan slash command dengan awalan `/`. Com
 | `$ping` | `$ping` | Memeriksa latensi bot ke Discord Gateway. |
 | `$status` | `$status` | Memeriksa status layanan Nexo. |
 | `$tools`, `/tools` | `$tools` | Menampilkan kemampuan tambahan yang sedang aktif. |
+| Mention atau `/tanya` | `Nexo, tampilkan daftar channel.` | Menampilkan daftar channel server melalui AI. |
 | `$sync` | `$sync` | Memperbarui daftar slash command; khusus owner. |
 | `$clear [limit]` | `$clear 50` | Menghapus pesan jika pengguna memiliki izin Manage Messages. |
 | `$reset`, `/reset` | `$reset` | Menghapus memory percakapan pengguna. |
@@ -132,6 +133,15 @@ $voice Lab IoT
 ```
 
 Tanpa nama, Nexo memakai channel tempat command dijalankan atau channel voice yang sedang digunakan pengguna.
+
+Untuk melihat daftar channel yang tersedia di server, gunakan percakapan AI:
+
+```text
+Nexo, tampilkan daftar channel di server ini.
+/tanya pertanyaan: Apa saja channel teks, voice, dan stage yang tersedia?
+```
+
+Nexo memiliki tool `get_server_channels` untuk kebutuhan tersebut. Tool ini bukan command prefix atau slash command mandiri, sehingga `$channels` dan `/channels` belum tersedia.
 
 ## Radar kompetisi
 
