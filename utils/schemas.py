@@ -8,9 +8,11 @@ from schemas.discord import (
     DiscordThreadSchema,
     EndDiscordEventSchema,
     EndDiscordPollSchema,
+    FindServerMembersSchema,
     GetServerChannelsSchema,
     GetServerRolesSchema,
     ListDiscordEventsSchema,
+    NotifyMemberSchema,
 )
 from utils.schema_utils import get_clean_schema
 
@@ -22,8 +24,10 @@ __all__ = [
     "DiscordThreadSchema",
     "EndDiscordEventSchema",
     "EndDiscordPollSchema",
+    "FindServerMembersSchema",
     "GetServerChannelsSchema",
     "GetServerRolesSchema",
     "ListDiscordEventsSchema",
+    "NotifyMemberSchema",
     "get_clean_schema",
 ]

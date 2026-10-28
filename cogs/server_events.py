@@ -40,7 +40,9 @@ from utils.schemas import (
     DiscordThreadSchema,
     EndDiscordEventSchema,
     EndDiscordPollSchema,
+    FindServerMembersSchema,
     ListDiscordEventsSchema,
+    NotifyMemberSchema,
 )
 from utils.template_renderer import render_event_template
 
@@ -83,6 +85,8 @@ class ServerEvents(EventLifecycleMixin, VoiceChannelMixin, commands.Cog):
                 "end_discord_poll": self.end_poll_handler,
                 "get_server_channels": self.get_channels_handler,
                 "get_server_roles": self.get_roles_handler,
+                "find_server_members": self.find_server_members_handler,
+                "notify_member": self.notify_member_handler,
                 "clear_messages": self.clear_messages_handler,
                 "check_voice_channel": self.check_voice_channel_handler,
             },
@@ -704,6 +708,104 @@ class ServerEvents(EventLifecycleMixin, VoiceChannelMixin, commands.Cog):
             return json.dumps(channels_info, indent=2)
         except Exception as e:  # noqa: BLE001
             return f"❌ Failed to get channel list: {e!s}"
+
+    async def find_server_members_handler(self, arguments: dict, ctx_obj=None):
+        try:
+            if not ctx_obj or not getattr(ctx_obj, "guild", None):
+                return "❌ Cannot search members because the server context was not found."
+
+            schema = FindServerMembersSchema.model_validate(arguments)
+            query = schema.query.strip().casefold()
+            guild = ctx_obj.guild
+            members = list(getattr(guild, "members", []))
+
+            if not members and hasattr(guild, "query_members"):
+                members = await guild.query_members(query, limit=25)
+
+            def member_names(member: discord.Member) -> list[str]:
+                return [
+                    value.casefold()
+                    for value in (
+                        member.name,
+                        member.display_name,
+                        getattr(member, "global_name", None),
+                        getattr(member, "nick", None),
+                    )
+                    if value
+                ]
+
+            matches = [
+                member
+                for member in members
+                if any(query in name for name in member_names(member))
+            ]
+            matches.sort(
+                key=lambda member: (
+                    0 if query in {name for name in member_names(member)} else 1,
+                    member.display_name.casefold(),
+                )
+            )
+
+            if not matches:
+                return f"ℹ️ No server member matched '{schema.query}'."
+
+            results = [
+                {
+                    "id": str(member.id),
+                    "username": member.name,
+                    "display_name": member.display_name,
+                    "global_name": member.global_name,
+                }
+                for member in matches[:5]
+            ]
+            return json.dumps(
+                {
+                    "query": schema.query,
+                    "total_matches": len(matches),
+                    "candidates": results,
+                    "note": "Search only. Do not mention or message a candidate unless the user explicitly asks to notify a selected member.",
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"Error in find_server_members_handler: {e}")
+            return f"❌ Failed to search server members: {e!s}"
+
+    async def notify_member_handler(self, arguments: dict, ctx_obj=None):
+        try:
+            if not ctx_obj or not getattr(ctx_obj, "guild", None):
+                return "❌ Cannot notify a member because the server context was not found."
+            if not has_permission(ctx_obj, "send_messages"):
+                return "❌ DENIED: You do not have permission to send messages in this channel."
+
+            schema = NotifyMemberSchema.model_validate(arguments)
+            if "@everyone" in schema.message.casefold() or "@here" in schema.message.casefold():
+                return "❌ Mentions to @everyone and @here are not allowed."
+
+            member = ctx_obj.guild.get_member(schema.member_id)
+            if not member:
+                return "❌ The selected member is not in this server. Search again and select an exact member ID."
+
+            channel = getattr(ctx_obj, "channel", None)
+            if not channel or not hasattr(channel, "send"):
+                return "❌ The current channel cannot receive messages."
+
+            await channel.send(
+                content=f"{member.mention} {schema.message.strip()}",
+                allowed_mentions=discord.AllowedMentions(
+                    users=[member],
+                    everyone=False,
+                    roles=False,
+                    replied_user=False,
+                ),
+            )
+            return f"✅ Message sent to {member.display_name}."
+        except discord.Forbidden:
+            return "❌ The bot does not have permission to send messages in this channel."
+        except Exception as e:  # noqa: BLE001
+            logger.error(f"Error in notify_member_handler: {e}")
+            return f"❌ Failed to notify member: {e!s}"
 
     async def get_roles_handler(self, arguments: dict, ctx_obj=None):
         try:

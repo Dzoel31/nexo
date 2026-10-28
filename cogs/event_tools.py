@@ -9,9 +9,11 @@ from utils.schemas import (
     DiscordThreadSchema,
     EndDiscordEventSchema,
     EndDiscordPollSchema,
+    FindServerMembersSchema,
     GetServerChannelsSchema,
     GetServerRolesSchema,
     ListDiscordEventsSchema,
+    NotifyMemberSchema,
     get_clean_schema,
 )
 
@@ -26,6 +28,8 @@ TOOL_NAMES = {
     "get_server_roles",
     "clear_messages",
     "check_voice_channel",
+    "find_server_members",
+    "notify_member",
 }
 
 
@@ -95,6 +99,16 @@ def register_event_tools(
             "check_voice_channel",
             "List users in a voice channel.",
             CheckVoiceChannelSchema,
+        ),
+        (
+            "find_server_members",
+            "Find server members by name. This search never sends a mention or message.",
+            FindServerMembersSchema,
+        ),
+        (
+            "notify_member",
+            "Send a message to one exact member selected by Discord ID. Use only when the user explicitly asks to notify or tag someone; never use for a search-only question.",
+            NotifyMemberSchema,
         ),
     )
 

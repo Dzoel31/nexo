@@ -9,7 +9,6 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
-from config.settings import settings
 from db.repository import (
     cancel_scheduled_announcement,
     create_scheduled_announcement,
@@ -20,8 +19,8 @@ from db.repository import (
 )
 from utils.auth_helper import has_permission
 from utils.mcp_client import (
-    LLM_BASE_URL,
     MCP_SERVER_URL,
+    check_llm_health,
     get_tools_from_mcp_server,
 )
 from utils.message_cleanup import slow_purge
@@ -609,28 +608,11 @@ class CoreCommands(commands.Cog):
         status_messages = ["🔍 Checking service status..."]
 
         # Check LLM provider
-        logger.info(f"LLM provider: {LLM_BASE_URL.replace('/v1', '')}")
-        try:
-            api_key = settings.LLM_API_KEY.strip("\"' \r\n")
-            llama_headers = {}
-            if api_key and api_key != "sk-no-key":
-                llama_headers["Authorization"] = f"Bearer {api_key}"
-
-            async with (
-                aiohttp.ClientSession() as session,
-                session.get(
-                    f"{LLM_BASE_URL.replace('/v1', '')}/health",
-                    headers=llama_headers,
-                    timeout=aiohttp.ClientTimeout(total=5),
-                ) as response,
-            ):
-                if response.status == 200:
-                    status_messages.append("✅ LLM Provider: ONLINE")
-                else:
-                    status_messages.append("❌ LLM Provider: UNAVAILABLE")
-        except TimeoutError, aiohttp.ClientError:
+        is_llm_healthy, _ = await check_llm_health()
+        if is_llm_healthy:
+            status_messages.append("✅ LLM Provider: ONLINE")
+        else:
             status_messages.append("❌ LLM Provider: UNAVAILABLE")
-
         # Check MCP server
         try:
             async with (
@@ -651,11 +633,16 @@ class CoreCommands(commands.Cog):
     @commands.command()
     @commands.is_owner()
     async def sync(self, ctx):
-        """Syncs slash commands to the current guild."""
-        await ctx.send("🔄 Syncing commands...")
-        self.bot.tree.copy_global_to(guild=ctx.guild)
+        """Syncs global slash commands and clears local guild duplicates."""
+        await ctx.send("🔄 Clearing guild duplicates and syncing globally...")
+
+        # 1. Clear guild-specific commands to avoid duplicates
+        self.bot.tree.clear_commands(guild=ctx.guild)
         await self.bot.tree.sync(guild=ctx.guild)
-        await ctx.send("✅ Successfully synced slash commands in this server!")
+
+        # 2. Sync globally
+        synced = await self.bot.tree.sync()
+        await ctx.send(f"✅ Successfully synced {len(synced)} global slash commands!")
 
     @commands.command()
     async def clear(self, ctx, limit: int = 100):
@@ -810,6 +797,74 @@ class CoreCommands(commands.Cog):
 
         embed.set_footer(text=f"Server: {interaction.guild.name} • Nexo KSM AIoT")
         await interaction.response.send_message(embed=embed)
+
+    @app_commands.command(
+        name="tag",
+        description="Kirim pesan kepada satu member yang dipilih secara langsung",
+    )
+    @app_commands.describe(
+        target="Member yang akan diberi tahu",
+        pesan="Isi pesan yang ingin dikirim",
+    )
+    @app_commands.checks.cooldown(
+        1, 10.0, key=lambda interaction: (interaction.guild_id or 0, interaction.user.id)
+    )
+    async def tag_member(
+        self,
+        interaction: discord.Interaction,
+        target: discord.Member,
+        pesan: str,
+    ):
+        if not interaction.guild or not interaction.channel:
+            await interaction.response.send_message(
+                "❌ Command ini hanya dapat digunakan di dalam server.",
+                ephemeral=True,
+            )
+            return
+        if not interaction.permissions.send_messages:
+            await interaction.response.send_message(
+                "❌ Anda tidak memiliki izin mengirim pesan di channel ini.",
+                ephemeral=True,
+            )
+            return
+        if not pesan.strip():
+            await interaction.response.send_message(
+                "❌ Pesan tidak boleh kosong.",
+                ephemeral=True,
+            )
+            return
+        if "@everyone" in pesan.casefold() or "@here" in pesan.casefold():
+            await interaction.response.send_message(
+                "❌ Mention @everyone dan @here tidak diperbolehkan.",
+                ephemeral=True,
+            )
+            return
+
+        try:
+            await interaction.channel.send(
+                content=f"{target.mention} {pesan.strip()}",
+                allowed_mentions=discord.AllowedMentions(
+                    users=[target],
+                    everyone=False,
+                    roles=False,
+                    replied_user=False,
+                ),
+            )
+            await interaction.response.send_message(
+                f"✅ Pesan dikirim kepada {target.display_name}.",
+                ephemeral=True,
+            )
+        except discord.Forbidden:
+            await interaction.response.send_message(
+                "❌ Nexo tidak memiliki izin mengirim pesan di channel ini.",
+                ephemeral=True,
+            )
+        except discord.HTTPException:
+            logger.exception("Failed to send /tag message")
+            await interaction.response.send_message(
+                "❌ Pesan gagal dikirim karena Discord sedang bermasalah.",
+                ephemeral=True,
+            )
 
     @commands.command(name="say")
     async def say(self, ctx, *, text: str | None = None):

@@ -13,8 +13,10 @@ from schemas.discord.moderation_tools import (
 )
 from schemas.discord.server_tools import (
     CheckVoiceChannelSchema,
+    FindServerMembersSchema,
     GetServerChannelsSchema,
     GetServerRolesSchema,
+    NotifyMemberSchema,
 )
 
 __all__ = [
@@ -25,7 +27,9 @@ __all__ = [
     "DiscordThreadSchema",
     "EndDiscordEventSchema",
     "EndDiscordPollSchema",
+    "FindServerMembersSchema",
     "GetServerChannelsSchema",
     "GetServerRolesSchema",
     "ListDiscordEventsSchema",
+    "NotifyMemberSchema",
 ]
