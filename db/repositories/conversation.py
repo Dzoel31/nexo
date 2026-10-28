@@ -209,6 +209,14 @@ async def reset_conversation_history(user_id: int, channel_id: int | None):
         logger.info(f"Reset conversation history for user {user_id}")
 
 
+async def reset_all_conversation_history() -> None:
+    """Delete all persisted conversations and their messages."""
+    async with async_session() as session:
+        await session.execute(text("DELETE FROM conversations"))
+        await session.commit()
+    logger.warning("All persisted conversation history was reset")
+
+
 async def _with_context_data(user_id: int, channel_id: int | None, consume):
     """Load context rows and consume them while the original read session is open."""
     now_utc = datetime.now(UTC)

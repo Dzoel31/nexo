@@ -15,9 +15,11 @@ from db.repository import (
     get_due_scheduled_announcements,
     list_pending_announcements,
     mark_announcement_status,
+    reset_all_conversation_history,
     reset_conversation_history,
 )
 from utils.auth_helper import has_permission
+from utils.command_help import build_command_help
 from utils.mcp_client import (
     MCP_SERVER_URL,
     check_llm_health,
@@ -107,26 +109,28 @@ class HelpView(discord.ui.View):
         if self.current_page == 0:
             embed.title = "🌟 Meta & General Commands"
             embed.description = (
-                "Perintah umum, moderasi, dan informasi status bot Nexo KSM AIoT.\n"
+                "Command umum Nexo KSM AIoT. Untuk cara pakai command tertentu, "
+                "gunakan `$help <command>` atau `$help <command> <topik>`, "
+                "misalnya `$help say to`.\n"
                 "─────────────────────────────"
             )
             embed.add_field(
                 name="Getting Started & Status",
                 value=(
                     "`$help` / `/help` : Menampilkan panduan pengguna interaktif ini\n"
-                    "`$ping` : Cek latensi bot ke Discord Gateway & Database\n"
-                    "`/system_info` : Cek metrik CPU, RAM, & status host Nexo\n"
-                    "`/token_analytics` : Dashboard analitik konsumsi token AI"
+                    "`$help say to` : Contoh cara melihat bantuan per command/topik\n"
+                    "`$ping` : Cek latensi bot ke Discord Gateway\n"
+                    "`$status` : Cek status provider LLM dan MCP Server\n"
+                    "`$tools` / `/tools` : Lihat tools Discord lokal dan MCP yang aktif"
                 ),
                 inline=False,
             )
             embed.add_field(
                 name="Management & Moderation",
                 value=(
-                    "`$say <pesan>` : Kirim pesan atas nama bot di channel aktif\n"
-                    "`$say to <#channel> <pesan>` : Kirim pesan atas nama bot ke channel tujuan\n"
+                    "`$say to <#channel> <pesan>` : Kirim pesan atau pengumuman terjadwal\n"
                     "`$clear [limit]` : Hapus pesan percakapan secara massal\n"
-                    "`/reset_memory` : Bersihkan riwayat memori sesi obrolan aktif"
+                    "`$reset` / `/reset` : Hapus memory percakapanmu di channel ini"
                 ),
                 inline=False,
             )
@@ -134,15 +138,18 @@ class HelpView(discord.ui.View):
         elif self.current_page == 1:
             embed.title = "🤖 AI & LLM Commands"
             embed.description = (
-                "Fitur kecerdasan buatan terintegrasi Llama.cpp, MCP, & Google Calendar.\n"
+                "Fitur kecerdasan buatan terintegrasi provider OpenAI-compatible, MCP, dan Google Calendar.\n"
                 "─────────────────────────────"
             )
             embed.add_field(
                 name="Interactive AI Chat & Memory",
                 value=(
-                    "`/reset_memory` : Bersihkan riwayat percakapan konteks AI Anda\n"
+                    "`/tanya` atau mention Nexo : Ajukan pertanyaan dengan bahasa natural\n"
+                    "`$reset` / `/reset` : Bersihkan memory di channel saat ini\n"
                     "`$tools` : Tampilkan seluruh tools lokal & MCP aktif\n"
-                    "`$sync` : Sinkronisasi manual Application Slash Commands"
+                    "`/token-stats` dan `/leaderboard-token` : Statistik token\n"
+                    "`$tokenstats` dan `$tokenleaderboard` : Alias prefix statistik token\n"
+                    "`$sync` : Sinkronisasi slash command (owner bot)"
                 ),
                 inline=False,
             )
@@ -152,7 +159,8 @@ class HelpView(discord.ui.View):
                     "Cukup mention/ajak ngobrol Nexo secara natural untuk:\n"
                     "• **Google Calendar & Discord Events:** Buat, sync 2 arah, klasifikasi & reminder agenda\n"
                     "• **Interactive Polls:** Buat polling interaktif & hitung hasil suara\n"
-                    "• **Voice & Forum:** Buat thread forum & cek anggota di voice channel"
+                    "• **Voice & Forum:** Buat thread forum & cek anggota di voice channel\n"
+                    "• **Kompetisi:** Gunakan `/lomba add`, `/lomba list`, `/lomba detail`, dan `/lomba delete`"
                 ),
                 inline=False,
             )
@@ -243,9 +251,9 @@ class HelpView(discord.ui.View):
             embed.add_field(
                 name="Continuous Delivery (CD)",
                 value=(
-                    "• Mendukung webhook deployment otomatis ke VPS / Portainer\n"
-                    "• Notifikasi rilis resmi disiarkan ke channel `#release-notes`\n"
-                    "• `/deploy [project]` : Trigger manual webhook deployment"
+                    "• Webhook workflow tertentu dapat memicu redeploy melalui Portainer\n"
+                    "• Notifikasi rilis resmi dan aktivitas project dikirim ke channel terkonfigurasi\n"
+                    "• Pengelolaan endpoint dan secret dilakukan oleh operator; tidak ada command `/deploy`"
                 ),
                 inline=False,
             )
@@ -571,8 +579,10 @@ class CoreCommands(commands.Cog):
         await ctx.send(f"Pong! Latency: {round(self.bot.latency * 1000)}ms")
 
     @commands.command(name="help", aliases=["h", "guide"])
-    async def help(self, ctx):
+    async def help(self, ctx, *, query: str | None = None):
         """Displays the Nexo bot usage guide with interactive UI."""
+        if query and query.strip():
+            return await ctx.send(embed=build_command_help(self.bot, query))
         view = HelpView(self.bot, ctx.author.id)
         embed = await view.build_embed()
         await ctx.send(embed=embed, view=view)
@@ -580,7 +590,15 @@ class CoreCommands(commands.Cog):
     @app_commands.command(
         name="help", description="Tampilkan panduan interaktif penggunaan Bot Nexo"
     )
-    async def help_slash(self, interaction: discord.Interaction):
+    @app_commands.describe(command="Nama command/topik, contoh: say to atau lomba add")
+    async def help_slash(
+        self, interaction: discord.Interaction, command: str | None = None
+    ):
+        if command and command.strip():
+            await interaction.response.send_message(
+                embed=build_command_help(self.bot, command), ephemeral=True
+            )
+            return
         view = HelpView(self.bot, interaction.user.id)
         embed = await view.build_embed()
         await interaction.response.send_message(embed=embed, view=view)
@@ -670,6 +688,7 @@ class CoreCommands(commands.Cog):
                 return await ctx.send(
                     "❌ You need 'Manage Messages' permission to reset all conversation context."
                 )
+            await reset_all_conversation_history()
             if hasattr(self.bot, "conversation_history"):
                 self.bot.conversation_history.clear()
             msg = "Global AI conversation memory context has been cleared for all users! 🧹✨"

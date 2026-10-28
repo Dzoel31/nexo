@@ -11,6 +11,7 @@ from db.repositories.competition import (
 from db.repositories.conversation import (
     CONVERSATION_TTL,
     get_or_create_conversation,
+    reset_all_conversation_history,
     reset_conversation_history,
 )
 from db.repositories.scheduled_announcement import (
@@ -75,6 +76,7 @@ __all__ = [
     "list_pending_announcements",
     "log_token_usage",
     "mark_announcement_status",
+    "reset_all_conversation_history",
     "reset_conversation_history",
     "save_message",
     "update_competition_reminders",

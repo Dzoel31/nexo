@@ -4,9 +4,21 @@ Nexo digunakan langsung dari server Discord. Pastikan kamu berada di server yang
 
 ## Tiga langkah pertama
 
-1. Ketik `$help` atau gunakan `/help`.
-2. Pilih kategori bantuan yang ingin dilihat.
+1. Ketik `$help` atau gunakan `/help` untuk membuka menu.
+2. Untuk instruksi langsung, ketik `$help <command>` atau `$help <command> <topik>`.
 3. Jalankan command yang sesuai, atau mention Nexo dan jelaskan kebutuhanmu.
+
+Contoh bantuan khusus:
+
+```text
+$help say
+$help say to
+$help say time
+$help lomba add
+/help command: say to
+```
+
+Format `/help` untuk parameter `command` akan menyajikan panduan yang sama.
 
 Contoh percakapan:
 
@@ -49,6 +61,10 @@ Pesan dikirim di channel tempat command dijalankan. Jika menggunakan percakapan 
 | Mengirim pesan dengan tag | `/tag` | `/tag target:@Cocolele pesan:"Tolong mandi!"` |
 | Melihat anggota voice channel | `$voice` atau `/voice` | `$voice Lab IoT` |
 | Menghapus ingatan percakapan | `$reset` atau `/reset` | `$reset` |
+
+Riwayat AI terpisah untuk tiap pasangan pengguna dan channel. `$reset` hanya
+menghapus riwayatmu di channel aktif. Pengelola dengan izin `Manage Messages`
+dapat memakai `$reset all` untuk menghapus seluruh riwayat tersimpan.
 
 ## Membuat pengumuman
 

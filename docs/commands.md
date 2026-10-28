@@ -8,17 +8,43 @@ Nexo menerima command dengan awalan `$` dan slash command dengan awalan `/`. Com
 
 | Command | Contoh | Kegunaan |
 | --- | --- | --- |
-| `$help`, `/help` | `$help` | Membuka panduan interaktif. |
+| `$help`, `/help` | `$help say to` | Membuka panduan interaktif atau cara pakai command tertentu. |
 | `$ping` | `$ping` | Memeriksa latensi bot ke Discord Gateway. |
 | `$status` | `$status` | Memeriksa status layanan Nexo. |
 | `$tools`, `/tools` | `$tools` | Menampilkan kemampuan tambahan yang sedang aktif. |
 | Mention atau `/tanya` | `Nexo, tampilkan daftar channel.` | Menampilkan daftar channel server melalui AI. |
 | `$sync` | `$sync` | Memperbarui daftar slash command; khusus owner. |
 | `$clear [limit]` | `$clear 50` | Menghapus pesan jika pengguna memiliki izin Manage Messages. |
-| `$reset`, `/reset` | `$reset` | Menghapus memory percakapan pengguna. |
-| `$reset all` | `$reset all` | Menghapus memory global; memerlukan Manage Messages. |
+| `$reset`, `/reset` | `$reset` | Menghapus riwayat AI milikmu di channel ini. |
+| `$reset all` | `$reset all` | Menghapus seluruh riwayat AI persisten seluruh pengguna/server; memerlukan Manage Messages. |
 
-`$help` memiliki beberapa halaman bantuan. Menu hanya dapat digunakan oleh pengguna yang membukanya.
+`$help` membuka menu interaktif. Untuk panduan khusus, berikan nama command dan
+opsional subcommand/topik. Ini berlaku untuk command prefix dan slash command;
+Nexo membaca deskripsi, opsi, dan parameter dari command yang terdaftar.
+
+```text
+$help say
+$help say to
+$help say embed
+$help say time
+$help say in
+$help say list
+$help say cancel
+$help lomba
+$help lomba add
+$help /tanya
+/help command: say to
+```
+
+Topik `say` memberi format, contoh, dan batasan sesuai parser yang digunakan.
+Untuk slash command, `$help` menampilkan subcommand dan parameter yang terdaftar.
+Menu interaktif tetap hanya dapat digunakan oleh pengguna yang membukanya.
+
+Riwayat AI dipisahkan berdasarkan pengguna dan channel. `$reset` dan `/reset`
+hanya menghapus riwayat pengguna yang menjalankan command pada channel aktif.
+`$reset all` menghapus seluruh conversation dan pesan tersimpan di database
+untuk semua pengguna dan server yang memakai database bot, serta memerlukan
+izin `Manage Messages`.
 
 ## Percakapan dan statistik AI
 
@@ -83,7 +109,7 @@ Format embed hanya mengubah tampilan pesan; mention di dalam isi tetap diproses 
 
 ### Menjadwalkan pesan
 
-Pesan dapat dijadwalkan dengan waktu absolut menggunakan `--time` atau waktu relatif menggunakan `--in`. Untuk saat ini, `--in` menerima angka yang diikuti satu huruf satuan berikut:
+Pesan dapat dijadwalkan dengan waktu absolut menggunakan `--time` atau waktu relatif menggunakan `--in`. `--time` menerima tanggal dan jam (`YYYY-MM-DD HH:MM`) atau jam saja (`HH:MM`); jika hanya jam diberikan, jadwal dibuat untuk waktu tersebut berikutnya. Untuk saat ini, `--in` menerima angka yang diikuti satu huruf satuan berikut:
 
 | Satuan | Arti | Contoh |
 | --- | --- | --- |
