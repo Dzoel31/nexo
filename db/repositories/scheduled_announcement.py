@@ -30,7 +30,7 @@ async def create_scheduled_announcement(
         is_embed=is_embed,
         title=title,
     )
-    new_id = uuid.uuid4()
+    new_id = uuid.uuid7()
     now_utc = datetime.now(UTC)
     async with async_session() as session:
         insert_sql = text("""

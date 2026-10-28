@@ -35,7 +35,7 @@ async def get_or_create_conversation(
         row = result.mappings().first()
 
         if not row:
-            new_id = uuid.uuid4()
+            new_id = uuid.uuid7()
             insert_sql = text("""
                 INSERT INTO conversations (id, user_id, channel_id, created_at, updated_at)
                 VALUES (:id, :user_id, :channel_id, :now_utc, :now_utc)
@@ -137,7 +137,7 @@ async def persist_message(
     """Validates and saves a new message with incremental token_count and sliding TTL touch to the database using raw SQL."""
     payload = MessageCreate(role=role, content=content, token_count=token_count)
     now_utc = datetime.now(UTC)
-    new_msg_id = uuid.uuid4()
+    new_msg_id = uuid.uuid7()
 
     role_val = (
         payload.role.name
