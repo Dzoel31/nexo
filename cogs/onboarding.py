@@ -17,7 +17,9 @@ class IntroModal(ui.Modal, title="Form Perkenalan KSM AIoT"):
     )
     id_number = ui.Label(
         text="NIM / NIDN / NIP",
-        component=ui.TextInput(placeholder="Contoh: 2210511084"),
+        component=ui.TextInput(
+            placeholder="Contoh: 2210511084", min_length=10, max_length=18
+        ),
         description="Nomor identitas (10 digit NIM/NIDN atau 18 digit NIP Dosen).",
     )
     batch = ui.Label(
