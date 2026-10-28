@@ -31,4 +31,10 @@ Local tools didaftarkan oleh Cog ke `bot.ai_tools` dan handler-nya ke `bot.local
 - `WebhookDeploy`: notifikasi GitHub dan pemanggilan webhook Portainer.
 - `CompetitionRadar`: data kompetisi dan reminder deadline.
 
-Konfigurasi runtime berasal dari environment atau `.env`, termasuk token Discord, database, URL LLM, URL MCP, secret GitHub, channel tujuan, dan ID generator voice channel.
+Riwayat percakapan LLM disimpan per pengguna dan channel. ID baru untuk
+conversation, pesan, dan pengumuman terjadwal dibuat sebagai UUIDv7. Waktu
+`created_at` tetap menjadi acuan urutan pesan; UUIDv7 berurutan secara kasar
+menurut waktu pembuatan, bukan pengganti timestamp atau jaminan urutan saat
+beberapa proses menulis bersamaan.
+
+Konfigurasi runtime berasal dari environment atau `.env`, termasuk token Discord, database, URL LLM, URL MCP, secret GitHub, channel tujuan, dan ID generator voice channel. Lihat [Konfigurasi dan deployment](configuration.md) untuk referensi lengkap.

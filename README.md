@@ -1,6 +1,6 @@
 # Nexo 🤖
 
-**Nexo** adalah asisten Discord cerdas bertenaga LLM (*Large Language Model*) lokal dan *Model Context Protocol* (MCP) yang dikembangkan khusus untuk **KSM AIoT** (Kelompok Studi Mahasiswa Artificial Intelligence & Internet of Things, UPN "Veteran" Jakarta).
+**Nexo** adalah asisten Discord cerdas bertenaga LLM (*Large Language Model*) dan *Model Context Protocol* (MCP) yang dikembangkan khusus untuk **KSM AIoT** (Kelompok Studi Mahasiswa Artificial Intelligence & Internet of Things, UPN "Veteran" Jakarta). Provider LLM dapat berupa layanan self-hosted maupun endpoint OpenAI-compatible seperti Azure.
 
 Nexo bertindak sebagai *Smart Community Assistant* yang mampu berinteraksi secara kontekstual, mengelola acara komunitas, menyinkronkan jadwal dengan Google Calendar, memproses Webhook GitHub CI/CD, hingga memicu *redeploy* kontainer otomatis via Portainer Webhook API dengan otorisasi keamanan berbasis peran (RBAC).
 
@@ -26,7 +26,7 @@ flowchart TB
     end
 
     subgraph AI_Infrastructure["AI & External Services"]
-        LLM["Llama.cpp Engine\n(Gemma 4 E2B GGUF)"]
+        LLM["OpenAI-Compatible LLM Provider\n(Self-hosted / Azure)"]
         MCP["MCP Server\n(Tools & Knowledge Base)"]
         GCal["Google Calendar API\n(Service Account)"]
         Portainer["Portainer Webhook API\n(Container Auto-Redeploy)"]
@@ -55,7 +55,7 @@ flowchart TB
 
 ## ✨ Fitur Utama
 
-- **Conversational AI & Group Context:** Nexo dapat ditanya melalui mention `@Nexo` di channel mana pun atau melalui slash command `/tanya`. Nexo secara cerdas membaca percakapan sebelumnya untuk mempertahankan konteks dialog.
+- **Percakapan AI & konteks per pengguna+channel:** Nexo dapat ditanya melalui mention `@Nexo` atau `/tanya`. Tiap pengguna memiliki riwayat terpisah pada setiap channel agar topik tidak tercampur.
 - **Asynchronous Task Queue & Rate Limiting:** Menggunakan antrean *non-blocking* dengan sliding cooldown 5 detik per pengguna guna mencegah *queue starvation* atau serangan Denial of Service (DoS).
 - **Local AI Tools & Strict Pydantic Schemas:** LLM dapat memanggil fungsi-fungsi lokal Discord menggunakan skema validasi Pydantic yang ketat:
   - 📅 **Manajemen Acara:** Membuat dan mengakhiri Discord Scheduled Events lengkap dengan siaran pengumuman dinamis.
@@ -65,7 +65,7 @@ flowchart TB
   - 🧹 **Message Purge:** Membersihkan pesan di channel secara aman dan asinkron.
 - **Role-Based Access Control (RBAC):** Seluruh aksi destruktif atau administratif diverifikasi melalui `utils/auth_helper.py` menggunakan `config/roles.json` dan Discord `guild_permissions`.
 - **CI/CD Gateway & Portainer Auto-Deploy:** Menerima payload webhook dari GitHub (`push`, `pull_request`, `workflow_run`) dan memicu pembaruan kontainer via Portainer Webhook API secara terisolasi tanpa *Docker socket exposure*.
-- **Token Analytics & Tracking:** Menghitung penggunaan token prompt dan response secara akurat dengan endpoint tokenisasi lokal, serta menyediakan command `/token-stats`.
+- **Analitik token:** Menghitung token secara lokal dengan `tiktoken` atau tokenizer Hugging Face dari metadata LiteLLM, dan menampilkan statistik melalui `/token-stats`. Jika tokenizer tidak dapat dimuat, Nexo menggunakan perkiraan karakter.
 
 ---
 
@@ -75,12 +75,10 @@ flowchart TB
 nexo/
 ├── .agents/                    # Aturan agen AI & konvensi proyek
 ├── config/
-│   ├── projects.json           # Pemetaan repo GitHub ke channel Discord & webhook Portainer
-│   └── roles.json              # Pemetaan nama role server ke ID Snowflake Discord
+│   └── settings.py             # Konfigurasi environment
 ├── cogs/                       # Modular Discord Cogs (Fitur Bot)
 │   ├── agent_orchestrator.py   # Antrean AI, rate limiting, context memory, /tanya
-│   ├── core_commands.py        # Command utilitas dasar ($ping, $clear)
-│   ├── help_command.py         # Menu bantuan interaktif
+│   ├── core_commands.py        # Command utilitas, bantuan, dan pengumuman
 │   ├── server_events.py        # Handler AI tool Discord, reminder loop, sinkronisasi GCal
 │   └── webhook_deploy.py       # Dispatcher notifikasi webhook & trigger Portainer
 ├── db/                         # Layer Database
@@ -106,12 +104,15 @@ nexo/
 │   └── test_webhook_templates.py
 ├── utils/                      # Modul Utilitas & Helper
 │   ├── auth_helper.py          # Otorisasi RBAC terpusat & permission check
+│   ├── command_help.py         # Bantuan rinci untuk command terdaftar
 │   ├── event_manager.py        # Logic pengingat, timezone WIB, pruning interval
 │   ├── gateway_server.py       # FastAPI server untuk menangani webhook GitHub
 │   ├── gcal_manager.py         # Klien Google Calendar API
 │   ├── mcp_client.py           # Klien LLM OpenAI-compatible & eksekutor tool MCP
 │   ├── schemas.py              # Pydantic models untuk AI tool calling
 │   └── template_renderer.py    # Engine rendering template Jinja2
+├── services/                   # Konteks LLM, token counter, dan scheduling
+├── docs/                       # Dokumentasi pengguna dan developer
 ├── docker-compose.yml          # Konfigurasi kontainer Docker Nexo
 ├── pyproject.toml              # Definisi dependensi & metadata proyek (uv)
 └── uv.lock                     # Lockfile dependensi deterministik
@@ -119,35 +120,22 @@ nexo/
 
 ---
 
-## ⚙️ Konfigurasi Environment Variables (`.env`)
+## ⚙️ Konfigurasi environment
 
-Buat file `.env` di root direktori dengan konfigurasi berikut:
+Salin `.env.example` menjadi `.env`, lalu isi token Discord, koneksi database,
+URL provider LLM, nama model, dan URL MCP. `LLM_BASE_URL` adalah base URL API
+OpenAI-compatible; jangan menambahkan path endpoint `/model/info` atau `/sse`.
+Untuk self-hosted LiteLLM, Nexo membaca metadata tokenizer dari gateway. Untuk
+provider lain, token dihitung memakai tokenizer lokal yang cocok jika nama model
+dikenali; bila tokenizer tidak tersedia Nexo memakai perkiraan.
 
-```env
-# Discord Configuration
-DISCORD_BOT_TOKEN=your_discord_bot_token_here
-PORT=8000
-HOST=0.0.0.0
-
-# Database Configuration
-DATABASE_URL=postgresql+asyncpg://user:password@localhost:5432/nexo_db
-
-# LLM & MCP Engine
-LLAMA_SERVER_URL=http://localhost:8080/v1
-LLAMA_TOKENIZE_URL=http://localhost:8080/tokenize
-MCP_SERVER_URL=http://localhost:8001/sse
-
-# Google Calendar Integration (Opsional)
-GOOGLE_SERVICE_ACCOUNT_FILE=credentials/service_account.json
-GOOGLE_CALENDAR_ID=your_calendar_id@group.calendar.google.com
-
-# GitHub Webhook & Channels
-GITHUB_SECRET=your_github_webhook_secret
-ANNOUNCEMENT_CHANNEL_ID=123456789012345678
-WEBHOOK_DEVLOGS_CHANNEL_ID=123456789012345678
-WEBHOOK_RELEASE_NOTES_CHANNEL_ID=123456789012345678
-WELCOME_AND_RULES_CHANNEL_ID=123456789012345678
-```
+ID channel dan role Discord dapat dibiarkan `0` bila fitur terkait tidak dipakai.
+Integrasi Google Calendar memerlukan file service account. Routing webhook dan
+role dapat memerlukan file `config/projects.json` dan `config/roles.json` yang
+disiapkan operator deployment; file tersebut tidak disimpan dalam repository.
+Lihat [Mulai menggunakan Nexo](docs/getting-started.md), [Command](docs/commands.md),
+dan panduan [LLM](docs/llm.md) untuk detail fitur. Referensi deployment tersedia
+di [dokumentasi konfigurasi](docs/configuration.md).
 
 ---
 

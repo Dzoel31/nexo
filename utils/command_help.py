@@ -182,6 +182,11 @@ def _prefix_help(
         topic = SAY_TOPIC_ALIASES.get(topic, topic)
         guide = SAY_TOPIC_GUIDES.get(topic)
         if guide:
+            guide = dict(guide)
+            guide["notes"] = [
+                *guide.get("notes", []),
+                "Semua bentuk `$say` memerlukan izin Manage Messages atau role pengelola yang dikonfigurasi.",
+            ]
             embed = discord.Embed(
                 title=f"Bantuan command: `$say {topic}`",
                 description=guide["description"],

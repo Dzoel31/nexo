@@ -13,6 +13,7 @@ nav = [
     { "Panduan pengguna" = [
         { "Mulai menggunakan Nexo" = "getting-started.md" },
         { "Command" = "commands.md" },
+        { "Konfigurasi dan deployment" = "configuration.md" },
     ] },
     { "Developer" = [
         { "Arsitektur umum" = "architecture.md" },
@@ -31,6 +32,9 @@ features = [
     "navigation.footer",
     "content.code.copy",
 ]
+
+[project.theme.icon]
+repo = "fontawesome/brands/github"
 
 [[project.theme.palette]]
 scheme = "default"

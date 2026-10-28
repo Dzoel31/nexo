@@ -19,6 +19,11 @@ Tools lokal didaftarkan ke model sebagai function tools. Daftar yang ditampilkan
 
 Nexo juga memiliki command langsung untuk sebagian fungsi tersebut, seperti `$clear`, `$voice`, `/voice`, dan `$tools`. Model menggunakan tool ketika permintaan ditulis dalam bahasa natural.
 
+Untuk satu respons model dengan beberapa tool call, Nexo menjalankan tool yang
+bersebelahan secara paralel hanya jika metadata tool menyatakan `readOnlyHint`.
+Tool mutasi lokal dan tool MCP tanpa tanda read-only diproses berurutan agar
+efek samping dan urutan yang diminta model tetap terjaga.
+
 `get_server_channels` digunakan ketika pengguna meminta daftar channel server melalui mention atau `/tanya`. Hasilnya berisi nama, jenis, dan ID channel yang tersedia untuk bot. Tidak ada command `$channels` atau `/channels` khusus untuk fitur ini.
 
 `find_server_members` hanya melakukan pencarian dan mengembalikan kandidat. Tool ini tidak mengirim mention. `notify_member` hanya digunakan saat permintaan pengguna memang meminta Nexo untuk men-tag atau memberi tahu seseorang, dan target harus berupa satu ID member yang tepat.

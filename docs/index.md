@@ -9,6 +9,9 @@ Kamu tidak perlu mengetahui cara kerja di baliknya untuk menggunakan Nexo. Cukup
 Buka [Mulai menggunakan Nexo](getting-started.md) untuk melihat contoh penggunaan paling umum. Jika ingin melihat semua command, buka halaman [Command](commands.md).
 
 Gunakan `$help` atau `/help` di Discord untuk membuka bantuan langsung dari Nexo. Bantuan tersebut menampilkan command yang tersedia di server dan fitur yang sedang aktif.
+Untuk bantuan terperinci, gunakan `$help say to` atau berikan nama command
+lainnya. Panduan deployment dan environment tersedia di
+[Konfigurasi dan deployment](configuration.md).
 
 ## Contoh permintaan
 
