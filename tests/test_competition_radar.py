@@ -4,7 +4,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import discord
 import pytest
 
-from cogs.competition_radar import CompetitionRadar, CompetitionView, parse_deadline_wib
+from cogs.competition_radar import (
+    WIB,
+    CompetitionRadar,
+    CompetitionView,
+    parse_deadline_wib,
+)
 
 
 def test_parse_deadline_wib():
@@ -173,7 +178,9 @@ async def test_lomba_add_success():
             interaction,
             nama="Gemastik 2026",
             kategori=MagicMock(value="Gemastik/PKM"),
-            deadline="2026-11-01 23:59",
+            deadline=(datetime.now(UTC) + timedelta(days=30))
+            .astimezone(WIB)
+            .strftime("%Y-%m-%d %H:%M"),
             link_pendaftaran="https://gemastik.kemdikbud.go.id",
             link_panduan="https://gemastik.kemdikbud.go.id/panduan.pdf",
             deskripsi="Kompetisi TIK Mahasiswa Nasional",
