@@ -40,7 +40,11 @@ class Settings(BaseSettings):
         validation_alias="LLM_BASE_URL",
     )
     LLM_API_KEY: str = Field(default="", validation_alias="LLM_API_KEY")
+    LLM_REQUEST_TIMEOUT_SECONDS: float = Field(
+        default=120.0, gt=0, validation_alias="LLM_REQUEST_TIMEOUT_SECONDS"
+    )
     HF_TOKEN: str = Field(default="", validation_alias="HF_TOKEN")
+    HF_HUB_OFFLINE: bool = Field(default=False, validation_alias="HF_HUB_OFFLINE")
     LLM_MODEL_NAME: str = Field(
         default="gemma-4-e2b-qat-q4_0-it",
         validation_alias="LLM_MODEL_NAME",

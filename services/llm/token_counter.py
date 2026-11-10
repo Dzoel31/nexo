@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import logging
+import threading
 from collections import OrderedDict
 from urllib.parse import quote, urlsplit, urlunsplit
 
@@ -18,22 +19,16 @@ LLM_API_KEY = settings.LLM_API_KEY.strip("\"' \r\n")
 HF_TOKEN = settings.HF_TOKEN.strip("\"' \r\n")
 TOTAL_CONTEXT_WINDOW = settings.TOTAL_CONTEXT_WINDOW
 LLM_MODEL_NAME = settings.LLM_MODEL_NAME
+HF_HUB_OFFLINE = settings.HF_HUB_OFFLINE
 ai_client = AsyncOpenAI(
     base_url=LLM_BASE_URL,
     api_key=LLM_API_KEY or "sk-no-key",
+    timeout=settings.LLM_REQUEST_TIMEOUT_SECONDS,
 )
 
 MAX_COMPLETION_TOKENS = 1024
-BASE_OVERHEAD_TOKENS = 1400
 TOOL_BUFFER_TOKENS = 1200
-
-USABLE_HISTORY_BUDGET = max(
-    1000,
-    TOTAL_CONTEXT_WINDOW
-    - (MAX_COMPLETION_TOKENS + BASE_OVERHEAD_TOKENS + TOOL_BUFFER_TOKENS),
-)
-COMPACTION_THRESHOLD = int(USABLE_HISTORY_BUDGET)
-TARGET_RETAIN_TOKENS = int(USABLE_HISTORY_BUDGET * 0.40)
+TOOL_RESULT_TOKENS = 800
 
 _TOKEN_CACHE: OrderedDict[str, int] = OrderedDict()
 _MAX_CACHE_SIZE = 1000
@@ -41,7 +36,10 @@ _INFLIGHT_TOKEN_REQUESTS: dict[str, asyncio.Future[int]] = {}
 _TOKENIZERS: dict[str, TokenCounter] = {}
 _TOKENIZER_LOAD_ERRORS: set[str] = set()
 _RESOLVED_TOKENIZER_MODEL: str | None = None
+_RESOLVED_CONTEXT_WINDOW: int | None = None
+_MODEL_METADATA_RESOLVED = False
 _MODEL_RESOLUTION_LOCK = asyncio.Lock()
+_TOKENIZER_LOAD_LOCK = threading.Lock()
 
 
 class TokenCounter:
@@ -69,7 +67,10 @@ class TokenCounter:
         else:
             self.backend = "transformers"
             self.tokenizer = AutoTokenizer.from_pretrained(
-                model_name, use_fast=True, token=HF_TOKEN or None
+                model_name,
+                use_fast=True,
+                token=HF_TOKEN or None,
+                local_files_only=HF_HUB_OFFLINE,
             )
             if not getattr(self.tokenizer, "chat_template", None):
                 raise ValueError(
@@ -175,11 +176,12 @@ class TokenCounter:
 
 def _get_tokenizer(model_name: str) -> TokenCounter:
     """Memoize tokenizers so we never rebuild them per call."""
-    tokenizer = _TOKENIZERS.get(model_name)
-    if tokenizer is None:
-        tokenizer = TokenCounter(model_name)
-        _TOKENIZERS[model_name] = tokenizer
-    return tokenizer
+    with _TOKENIZER_LOAD_LOCK:
+        tokenizer = _TOKENIZERS.get(model_name)
+        if tokenizer is None:
+            tokenizer = TokenCounter(model_name)
+            _TOKENIZERS[model_name] = tokenizer
+        return tokenizer
 
 
 def _is_litellm_gateway() -> bool:
@@ -204,17 +206,26 @@ def _model_info_url() -> str:
 
 
 async def _resolve_tokenizer_model() -> str:
-    """Resolve the Hugging Face tokenizer name exposed by LiteLLM."""
+    """Resolve the tokenizer name using cached LiteLLM model metadata."""
+    await _resolve_model_metadata()
+    return _RESOLVED_TOKENIZER_MODEL or LLM_MODEL_NAME
+
+
+async def _resolve_model_metadata() -> None:
+    """Load tokenizer and input-context metadata once per process."""
+    global _MODEL_METADATA_RESOLVED, _RESOLVED_CONTEXT_WINDOW
     global _RESOLVED_TOKENIZER_MODEL
 
-    if _RESOLVED_TOKENIZER_MODEL:
-        return _RESOLVED_TOKENIZER_MODEL
+    if _MODEL_METADATA_RESOLVED:
+        return
     if not _is_litellm_gateway():
-        return LLM_MODEL_NAME
+        _RESOLVED_TOKENIZER_MODEL = LLM_MODEL_NAME
+        _MODEL_METADATA_RESOLVED = True
+        return
 
     async with _MODEL_RESOLUTION_LOCK:
-        if _RESOLVED_TOKENIZER_MODEL:
-            return _RESOLVED_TOKENIZER_MODEL
+        if _MODEL_METADATA_RESOLVED:
+            return
 
         url = f"{_model_info_url()}?model={quote(LLM_MODEL_NAME, safe='')}"
         headers = {}
@@ -232,70 +243,81 @@ async def _resolve_tokenizer_model() -> str:
             ):
                 response.raise_for_status()
                 payload = await response.json()
-            if not isinstance(payload, dict):
-                raise TypeError("LiteLLM model info response must be an object")
 
-            model_entries = payload.get("data")
-            if not isinstance(model_entries, list):
-                raise TypeError("LiteLLM model info response missing 'data' list")
-
-            model_entry = next(
+            entries = payload.get("data") if isinstance(payload, dict) else None
+            if not isinstance(entries, list):
+                raise TypeError("LiteLLM model info response is missing its data list")
+            entry = next(
                 (
-                    entry
-                    for entry in model_entries
-                    if isinstance(entry, dict)
-                    and entry.get("model_name") == LLM_MODEL_NAME
+                    item
+                    for item in entries
+                    if isinstance(item, dict)
+                    and item.get("model_name") == LLM_MODEL_NAME
                 ),
                 None,
             )
-            if model_entry is None:
-                raise RuntimeError(
-                    "LiteLLM model info response has no exact entry for "
-                    f"model '{LLM_MODEL_NAME}'"
-                )
+            if entry is None:
+                raise ValueError(f"LiteLLM returned no metadata for '{LLM_MODEL_NAME}'")
 
-            model_info = model_entry.get("litellm_params")
-            if not isinstance(model_info, dict):
-                raise TypeError(
-                    "LiteLLM model info entry missing 'litellm_params' object"
-                )
+            params = entry.get("litellm_params") or {}
+            model_info = entry.get("model_info") or {}
+            tokenizer_model = params.get("tokenizer_with_hf_repo")
+            context_window = model_info.get("max_input_tokens")
 
-            tokenizer_model = model_info.get("tokenizer_with_hf_repo")
-            if not isinstance(tokenizer_model, str) or not tokenizer_model.strip():
-                raise ValueError(
-                    "LiteLLM model info did not include tokenizer_with_hf_repo"
-                )
-            _RESOLVED_TOKENIZER_MODEL = tokenizer_model.strip()
+            if isinstance(tokenizer_model, str) and tokenizer_model.strip():
+                _RESOLVED_TOKENIZER_MODEL = tokenizer_model.strip()
+            if (
+                isinstance(context_window, int)
+                and not isinstance(context_window, bool)
+                and context_window > 0
+            ):
+                _RESOLVED_CONTEXT_WINDOW = context_window
+
             logger.info(
-                "Resolved tokenizer for model '%s' to '%s' via LiteLLM model info",
+                "Resolved LiteLLM metadata (model=%s, context_window=%s, tokenizer=%s)",
                 LLM_MODEL_NAME,
-                _RESOLVED_TOKENIZER_MODEL,
+                _RESOLVED_CONTEXT_WINDOW or TOTAL_CONTEXT_WINDOW,
+                _RESOLVED_TOKENIZER_MODEL or LLM_MODEL_NAME,
             )
-        except (
-            aiohttp.ClientError,
-            KeyError,
-            RuntimeError,
-            TimeoutError,
-            TypeError,
-            ValueError,
-        ) as error:
+        except (aiohttp.ClientError, TimeoutError, TypeError, ValueError) as error:
             logger.warning(
-                "Could not resolve tokenizer for LiteLLM model '%s': %s. "
-                "Falling back to configured model name.",
+                "Could not resolve LiteLLM metadata for model %s: %s",
                 LLM_MODEL_NAME,
                 error,
             )
-            _RESOLVED_TOKENIZER_MODEL = LLM_MODEL_NAME
 
-    return _RESOLVED_TOKENIZER_MODEL
+        if not _RESOLVED_TOKENIZER_MODEL:
+            _RESOLVED_TOKENIZER_MODEL = LLM_MODEL_NAME
+        if _RESOLVED_CONTEXT_WINDOW is None:
+            logger.warning(
+                "Using configured TOTAL_CONTEXT_WINDOW fallback (%s)",
+                TOTAL_CONTEXT_WINDOW,
+            )
+        _MODEL_METADATA_RESOLVED = True
+
+
+async def get_context_budget(
+    prompt_overhead_tokens: int,
+    tool_buffer_tokens: int = TOOL_BUFFER_TOKENS,
+) -> tuple[int, int, int]:
+    """Return the active input limit, history budget, and retained-history budget."""
+    await _resolve_model_metadata()
+    context_window = _RESOLVED_CONTEXT_WINDOW or TOTAL_CONTEXT_WINDOW
+    history_budget = max(
+        0,
+        context_window
+        - MAX_COMPLETION_TOKENS
+        - max(0, prompt_overhead_tokens)
+        - max(0, tool_buffer_tokens),
+    )
+    return context_window, history_budget, int(history_budget * 0.40)
 
 
 async def count_token(text_content: str) -> int:
-    """Count tokens locally with an LRU cache + single-flight guard.
+    """Count tokens with an LRU cache and shared in-flight requests.
 
-    Kept ``async`` for backward compatibility with callers that ``await``
-    it. All work inside is synchronous (CPU-bound); there is no network
-    call and therefore no ``await`` in the hot path.
+    The first cache miss may resolve LiteLLM metadata and load the tokenizer.
+    Tokenizer loading and counting run in worker threads to keep the event loop responsive.
     """
     if not text_content:
         return 0
@@ -316,13 +338,16 @@ async def count_token(text_content: str) -> int:
     _INFLIGHT_TOKEN_REQUESTS[text_hash] = future
 
     tokenizer_model = None
+    token_count = max(1, len(text_content) // 4)
     try:
         tokenizer_model = await _resolve_tokenizer_model()
         if tokenizer_model in _TOKENIZER_LOAD_ERRORS:
             token_count = max(1, len(text_content) // 4)
         else:
-            token_count = _get_tokenizer(tokenizer_model).count_text(text_content)
-    except (KeyError, OSError, RuntimeError, TypeError, ValueError) as error:
+            tokenizer = await asyncio.to_thread(_get_tokenizer, tokenizer_model)
+            token_count = await asyncio.to_thread(tokenizer.count_text, text_content)
+    except Exception as error:  # noqa: BLE001
+        # Tokenization must not make the chat path unavailable.
         if tokenizer_model:
             _TOKENIZER_LOAD_ERRORS.add(tokenizer_model)
         # Conservative fallback: ~4 chars ≈ 1 token.

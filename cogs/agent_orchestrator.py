@@ -9,12 +9,12 @@ from discord import app_commands
 from discord.ext import commands
 
 from config.settings import settings
-from db.repository import (
-    check_and_trigger_rolling_summary,
-    count_token,
+from db.repositories.token_usage import (
     get_guild_token_leaderboard,
     get_user_token_stats,
 )
+from services.llm.context import check_and_trigger_rolling_summary
+from services.llm.token_counter import count_token
 from utils.mcp_client import (
     SYSTEM_PROMPT,
     ai_client,
@@ -49,9 +49,9 @@ class AgentOrchestrator(commands.Cog):
                     get_tools_from_mcp_server(), timeout=3
                 )
         except Exception as e:  # noqa: BLE001
-            logger.warning(f"MCP Server not available on startup: {e}")
+            logger.warning("MCP server is unavailable during startup: %s", e)
 
-        # Pre-calculate static base token overhead once
+        # Warm the model tokenizer and report the startup tool registry.
         try:
             all_tools = []
             if getattr(self.bot, "ai_tools", None):
@@ -60,18 +60,27 @@ class AgentOrchestrator(commands.Cog):
                 all_tools.extend(self.bot.cached_mcp_tools)
 
             sanitized = sanitize_tools_list(all_tools) if all_tools else []
+            for s in sanitized:
+                function = s.get("function", {})
+                logger.info(
+                    "Registered tool schema (name=%s, description=%s)",
+                    function.get("name"),
+                    function.get("description"),
+                )
             tools_json_str = json.dumps(sanitized)
 
             sys_tok = await count_token(SYSTEM_PROMPT)
             tools_tok = await count_token(tools_json_str)
-            self.bot.base_overhead_tokens = sys_tok + tools_tok
             logger.info(
-                f"Pre-calculated Base Overhead: {self.bot.base_overhead_tokens} tokens "
-                f"(System: {sys_tok}, Tools: {tools_tok})"
+                "Tokenizer warm-up complete (system_tokens=%s, tool_schema_tokens=%s, tools=%s)",
+                sys_tok,
+                tools_tok,
+                len(sanitized),
             )
         except Exception as e:  # noqa: BLE001
-            self.bot.base_overhead_tokens = 1400
-            logger.warning(f"Could not pre-calculate base token overhead: {e}")
+            logger.warning(
+                "Tokenizer warm-up failed; lazy initialization will retry: %s", e
+            )
 
         # Start worker
         self.worker_task = asyncio.create_task(self.worker())
@@ -220,7 +229,7 @@ class AgentOrchestrator(commands.Cog):
                             async def on_compaction_start(ctx_obj=ctx_obj):
                                 try:
                                     embed.set_footer(  # noqa: B023
-                                        text=f"{base_footer} • 🧠 Merangkum memori..."  # noqa: B023
+                                        text=f"{base_footer} • 🧠 Summarizing memory..."  # noqa: B023
                                     )
                                     if is_interaction and hasattr(  # noqa: B023
                                         ctx_obj,
@@ -239,7 +248,7 @@ class AgentOrchestrator(commands.Cog):
                             async def on_compaction_end(ctx_obj=ctx_obj):
                                 try:
                                     embed.set_footer(  # noqa: B023
-                                        text=f"{base_footer} • 🧠 Memori terpadatkan"  # noqa: B023
+                                        text=f"{base_footer} • 🧠 Memory compacted"  # noqa: B023
                                     )
                                     if is_interaction and hasattr(  # noqa: B023
                                         ctx_obj,
@@ -274,8 +283,8 @@ class AgentOrchestrator(commands.Cog):
                             exc_info=True,
                         )
                         err_text = (
-                            "Oops, maaf! Nexo mengalami kendala teknis saat memproses pesanmu. "
-                            "Silakan coba sesaat lagi ya! 🤖"
+                            "Nexo encountered a technical issue while processing your message. "
+                            "Please try again shortly. 🤖"
                         )
                         if is_expired:
                             await channel.send(f"<@{user_id}> {err_text}")
@@ -315,7 +324,7 @@ class AgentOrchestrator(commands.Cog):
 
         self._schedule_mcp_tools_refresh()
 
-        logger.info(f"User: {interaction.user.name} asked: {pertanyaan}")
+        logger.info("User submitted a question (username=%s)", interaction.user.name)
 
         position = self.bot.message_queue.qsize()
         if self.bot.bot_lock.locked():
@@ -334,16 +343,16 @@ class AgentOrchestrator(commands.Cog):
     ):
         if isinstance(error, app_commands.CommandOnCooldown):
             retry_in = round(error.retry_after, 1)
-            msg = f"⏳ Harap tunggu **{retry_in} detik** sebelum bertanya lagi ya!"
+            msg = f"⏳ Please wait **{retry_in} seconds** before asking again."
             if interaction.response.is_done():
                 await interaction.followup.send(msg, ephemeral=True)
             else:
                 await interaction.response.send_message(msg, ephemeral=True)
         else:
-            logger.error(f"Error in /tanya slash command: {error}")
+            logger.error("Slash command failed (/tanya): %s", error)
             if not interaction.response.is_done():
                 await interaction.response.send_message(
-                    "❌ Terjadi kesalahan saat memproses perintah.", ephemeral=True
+                    "❌ An error occurred while processing the command.", ephemeral=True
                 )
 
     @app_commands.command(
@@ -386,7 +395,7 @@ class AgentOrchestrator(commands.Cog):
             inline=True,
         )
         embed.set_footer(
-            text="💡 Tip: Gunakan $reset untuk membersihkan konteks memori aktif."
+            text="💡 Tip: Use $reset to clear your active conversation context."
         )
         await interaction.edit_original_response(embed=embed)
 
@@ -426,7 +435,7 @@ class AgentOrchestrator(commands.Cog):
             inline=True,
         )
         embed.set_footer(
-            text="💡 Tip: Gunakan $reset untuk membersihkan konteks memori aktif."
+            text="💡 Tip: Use $reset to clear your active conversation context."
         )
         await ctx.reply(embed=embed)
 
@@ -532,7 +541,7 @@ class AgentOrchestrator(commands.Cog):
         if not self.bot.user:
             return
 
-        # Hanya trigger jika bot di-mention secara eksplisit/langsung (bukan karena @everyone atau @here)
+        # Trigger only when the bot is mentioned directly, not through @everyone or @here.
         is_mentioned = (
             (self.bot.user in message.mentions)
             or (f"<@{self.bot.user.id}>" in message.content)
@@ -551,7 +560,7 @@ class AgentOrchestrator(commands.Cog):
                 remaining = round(5.0 - (now - last_call), 1)
                 try:
                     await message.reply(
-                        f"⏳ Harap tunggu **{remaining} detik** sebelum bertanya lagi ya!",
+                        f"⏳ Please wait **{remaining} seconds** before asking again.",
                         delete_after=4,
                     )
                 except Exception:  # noqa: S110, BLE001
@@ -626,7 +635,7 @@ class AgentOrchestrator(commands.Cog):
                 )
 
             except Exception as tag_err:  # noqa: BLE001
-                logger.error(f"Error handling mentioned message: {tag_err}")
+                logger.error("Failed to handle a mentioned message: %s", tag_err)
 
 
 async def setup(bot):

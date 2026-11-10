@@ -9,14 +9,16 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
-from db.repository import (
+from db.repositories.conversation import (
+    reset_all_conversation_history,
+    reset_conversation_history,
+)
+from db.repositories.scheduled_announcement import (
     cancel_scheduled_announcement,
     create_scheduled_announcement,
     get_due_scheduled_announcements,
     list_pending_announcements,
     mark_announcement_status,
-    reset_all_conversation_history,
-    reset_conversation_history,
 )
 from utils.auth_helper import has_permission
 from utils.command_help import build_command_help

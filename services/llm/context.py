@@ -11,11 +11,7 @@ from db.repositories.conversation import (
     persist_message,
 )
 from schemas.llm.conversation import LLMMessagePayload
-from services.llm.token_counter import (
-    COMPACTION_THRESHOLD,
-    TARGET_RETAIN_TOKENS,
-    count_token,
-)
+from services.llm.token_counter import count_token, get_context_budget
 
 logger = logging.getLogger("chat_repository")
 
@@ -33,18 +29,40 @@ async def save_message(
 
 
 async def get_conversation_context(
-    user_id: int, channel_id: int | None
+    user_id: int,
+    channel_id: int | None,
+    *,
+    prompt_overhead_tokens: int = 1400,
 ) -> tuple[str | None, list[dict], int]:
     """Build a token-budgeted LLM context from persisted conversation rows."""
 
     async def build_context(summary, sorted_messages):
-        if summary is None and not sorted_messages:
-            return None, [], 0
-        if not sorted_messages:
-            return summary, [], await count_token(summary) if summary else 0
+        (
+            _context_window,
+            history_budget,
+            _target_retain_tokens,
+        ) = await get_context_budget(prompt_overhead_tokens)
         current_tokens = 0
         if summary:
             current_tokens += await count_token(summary)
+            if current_tokens > history_budget:
+                low, high = 0, len(summary)
+                suffix = " [Summary truncated to fit the context budget.]"
+                while low < high:
+                    midpoint = (low + high + 1) // 2
+                    if await count_token(summary[:midpoint] + suffix) <= history_budget:
+                        low = midpoint
+                    else:
+                        high = midpoint - 1
+                truncated_summary = summary[:low] + suffix
+                if await count_token(truncated_summary) <= history_budget:
+                    summary = truncated_summary
+                    current_tokens = await count_token(summary)
+                else:
+                    summary = None
+                    current_tokens = 0
+        if not sorted_messages:
+            return summary, [], current_tokens
         recent_selected = []
         for msg in reversed(sorted_messages):
             msg_tok = (
@@ -52,7 +70,7 @@ async def get_conversation_context(
                 if msg["token_count"] > 0
                 else await count_token(msg["content"])
             )
-            if current_tokens + msg_tok <= COMPACTION_THRESHOLD:
+            if current_tokens + msg_tok <= history_budget:
                 recent_selected.append((msg, msg_tok))
                 current_tokens += msg_tok
             else:
@@ -96,6 +114,11 @@ async def check_and_trigger_rolling_summary(
         if not sorted_messages:
             return None
         msg_tokens = []
+        (
+            _context_window,
+            compaction_threshold,
+            target_retain_tokens,
+        ) = await get_context_budget(1400)
         total_tokens = 0
         for msg in sorted_messages:
             token_total = (
@@ -105,18 +128,24 @@ async def check_and_trigger_rolling_summary(
             )
             msg_tokens.append((msg, token_total))
             total_tokens += token_total
-        if total_tokens < COMPACTION_THRESHOLD:
+        if total_tokens < compaction_threshold:
             return None
         retained_tokens = 0
         split_index = len(sorted_messages)
         for i in range(len(msg_tokens) - 1, -1, -1):
             _, token_total = msg_tokens[i]
-            if retained_tokens + token_total <= TARGET_RETAIN_TOKENS:
+            if retained_tokens + token_total <= target_retain_tokens:
                 retained_tokens += token_total
                 split_index = i
             else:
                 break
-        to_summarize = sorted_messages[:split_index]
+        to_summarize = []
+        summary_input_tokens = 0
+        for message, token_total in msg_tokens[:split_index]:
+            if summary_input_tokens + token_total > compaction_threshold:
+                break
+            to_summarize.append(message)
+            summary_input_tokens += token_total
         if not to_summarize:
             return None
         if callable(on_compaction_start):

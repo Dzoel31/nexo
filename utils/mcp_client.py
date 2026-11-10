@@ -11,13 +11,15 @@ from mcp.client.sse import sse_client
 from openai import AsyncOpenAI
 
 from config.settings import settings
-from db.repository import (
-    MessageRole,
+from db.models import MessageRole
+from db.repositories.conversation import get_or_create_conversation
+from db.repositories.token_usage import log_token_usage
+from services.llm.context import get_conversation_context, save_message
+from services.llm.token_counter import (
+    MAX_COMPLETION_TOKENS,
+    TOOL_RESULT_TOKENS,
     count_token,
-    get_conversation_context,
-    get_or_create_conversation,
-    log_token_usage,
-    save_message,
+    get_context_budget,
 )
 
 logger = logging.getLogger("mcp_client")
@@ -37,7 +39,11 @@ try:
         SYSTEM_PROMPT = f.read().strip()
 except FileNotFoundError:
     SYSTEM_PROMPT = "You are Nexo, a helpful assistant."
-ai_client = AsyncOpenAI(base_url=LLM_BASE_URL, api_key=LLM_API_KEY or "sk-no-key")
+ai_client = AsyncOpenAI(
+    base_url=LLM_BASE_URL,
+    api_key=LLM_API_KEY or "sk-no-key",
+    timeout=settings.LLM_REQUEST_TIMEOUT_SECONDS,
+)
 
 
 def sanitize_parameters(schema: dict) -> dict:
@@ -207,10 +213,16 @@ async def execute_mcp_tool(tool_name: str, arguments: dict) -> str:
     candidates = [MCP_SERVER_URL.rstrip("/") + "/sse"]
     for url in candidates:
         try:
-            async with sse_client(url) as (read_stream, write_stream):  # noqa: SIM117
-                async with ClientSession(read_stream, write_stream) as session:
-                    await session.initialize()
-                    result = await session.call_tool(tool_name, arguments)
+            async with asyncio.timeout(30):
+                async with sse_client(url) as (read_stream, write_stream):
+                    async with ClientSession(read_stream, write_stream) as session:
+                        await session.initialize()
+                        result = await session.call_tool(tool_name, arguments)
+
+                    if getattr(result, "isError", False):
+                        raise RuntimeError(
+                            f"MCP server reported failure for '{tool_name}'."
+                        )
 
                     if hasattr(result, "content") and isinstance(result.content, list):
                         text_results = []
@@ -222,12 +234,22 @@ async def execute_mcp_tool(tool_name: str, arguments: dict) -> str:
                         return combined
                     else:
                         return str(result)
-        except Exception as e:  # noqa: BLE001
-            error_msg = f"Error calling MCP tool '{tool_name}' at {url}: {e!s}"
-            logger.error(error_msg)
+        except TimeoutError:
+            logger.error(
+                "MCP tool call timed out (tool=%s, timeout_seconds=30)", tool_name
+            )
+            raise RuntimeError(
+                f"Tool '{tool_name}' exceeded the 30-second timeout."
+            ) from None
+        except aiohttp.ClientError, OSError, RuntimeError, ValueError:
+            logger.exception(
+                "MCP tool call failed (tool=%s, endpoint=%s)", tool_name, url
+            )
             continue
 
-    return "⚠️ Tool execution failed or unable to connect."
+    raise RuntimeError(
+        f"Tool '{tool_name}' failed because the MCP server could not complete the request."
+    )
 
 
 async def check_services_health():
@@ -315,14 +337,117 @@ async def _run_tool_handler(bot, tool_name: str, arguments: dict, ctx_obj) -> st
 
 
 async def _run_tool_handler_safely(bot, tool_name: str, arguments: dict, ctx_obj):
+    started_at = time.perf_counter()
+    succeeded = False
     try:
-        return await _run_tool_handler(bot, tool_name, arguments, ctx_obj)
+        result = await _run_tool_handler(bot, tool_name, arguments, ctx_obj)
+        succeeded = True
+        return result
+    except (TypeError, ValueError, RuntimeError, KeyError, TimeoutError) as error:
+        logger.exception("Tool handler failed (tool=%s)", tool_name)
+        return f"Tool '{tool_name}' failed: {error}"
     except Exception:
-        logger.exception("Unhandled exception executing tool '%s'", tool_name)
-        return (
-            f"Gagal mengeksekusi fungsi '{tool_name}' karena kendala internal. "
-            "Harap beri tahu pengguna untuk mencoba sesaat lagi."
+        logger.exception("Unexpected tool handler failure (tool=%s)", tool_name)
+        return f"Tool '{tool_name}' failed due to an unexpected internal error."
+    finally:
+        logger.info(
+            "Tool execution finished (tool=%s, succeeded=%s, latency_ms=%s)",
+            tool_name,
+            succeeded,
+            int((time.perf_counter() - started_at) * 1000),
         )
+
+
+def _validate_schema_value(value, schema: dict, path: str = "arguments") -> str | None:
+    """Validate the common JSON Schema constraints used by tool arguments."""
+    expected_type = schema.get("type")
+    type_checks = {
+        "object": lambda item: isinstance(item, dict),
+        "array": lambda item: isinstance(item, list),
+        "string": lambda item: isinstance(item, str),
+        "integer": lambda item: isinstance(item, int) and not isinstance(item, bool),
+        "number": lambda item: (
+            isinstance(item, (int, float)) and not isinstance(item, bool)
+        ),
+        "boolean": lambda item: isinstance(item, bool),
+        "null": lambda item: item is None,
+    }
+    check = type_checks.get(expected_type)
+    if check and not check(value):
+        return f"{path} must be {expected_type}"
+    if "enum" in schema and value not in schema["enum"]:
+        return f"{path} must be one of the allowed values"
+    if isinstance(value, dict):
+        properties = schema.get("properties", {})
+        missing = [key for key in schema.get("required", []) if key not in value]
+        if missing:
+            return f"{path} is missing required field(s): {', '.join(missing)}"
+        if schema.get("additionalProperties") is False:
+            unexpected = [key for key in value if key not in properties]
+            if unexpected:
+                return f"{path} contains unexpected field(s): {', '.join(unexpected)}"
+        for key, item in value.items():
+            child_schema = properties.get(key)
+            if child_schema:
+                error = _validate_schema_value(item, child_schema, f"{path}.{key}")
+                if error:
+                    return error
+    if isinstance(value, list) and isinstance(schema.get("items"), dict):
+        for index, item in enumerate(value):
+            error = _validate_schema_value(item, schema["items"], f"{path}[{index}]")
+            if error:
+                return error
+    return None
+
+
+async def _trim_history_for_request(
+    messages: list,
+    current_user_message: dict,
+    tools: list[dict],
+    context_window: int,
+    completion_reserve: int,
+) -> int:
+    """Trim oldest persisted context until the serialized request fits its budget."""
+    tool_tokens = (
+        await count_token(json.dumps(tools, ensure_ascii=False)) if tools else 0
+    )
+
+    while True:
+        serialized_messages = []
+        for message in messages:
+            if isinstance(message, dict):
+                payload = message
+            elif hasattr(message, "model_dump"):
+                payload = message.model_dump(exclude_none=True)
+            else:
+                payload = {"content": getattr(message, "content", "")}
+            serialized_messages.append(
+                json.dumps(payload, ensure_ascii=False, default=str)
+            )
+
+        request_tokens = tool_tokens
+        for serialized in serialized_messages:
+            request_tokens += await count_token(serialized)
+        if request_tokens + completion_reserve <= context_window:
+            return request_tokens
+
+        user_index = next(
+            index
+            for index, message in enumerate(messages)
+            if message is current_user_message
+        )
+        if user_index <= 1:
+            logger.warning(
+                "Request exceeds the model input budget after conversation history was removed "
+                "(estimated_tokens=%s, context_window=%s)",
+                request_tokens,
+                context_window,
+            )
+            raise ValueError(
+                "The current prompt and tool schemas exceed the model input budget."
+            )
+
+        messages.pop(1)
 
 
 async def _execute_tool_calls(
@@ -334,10 +459,7 @@ async def _execute_tool_calls(
     while index < len(calls):
         call = calls[index]
         if call["error"] is not None:
-            results[index] = (
-                "Error: Format argumen JSON tidak valid "
-                f"({call['error']}). Harap gunakan JSON yang valid."
-            )
+            results[index] = f"Tool call was not executed: {call['error']}"
             index += 1
             continue
 
@@ -393,24 +515,6 @@ async def process_with_mcp_tools(
     )
     conv = await get_or_create_conversation(user_id, channel_id)
 
-    summary, recent_messages, _history_tokens = await get_conversation_context(
-        user_id, channel_id
-    )
-
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-    ]
-
-    if summary:
-        messages.append(
-            {
-                "role": "system",
-                "content": f"<past_conversation_summary>\n{summary}\n</past_conversation_summary>",
-            }
-        )
-
-    messages.extend(recent_messages)
-
     current_time_str = datetime.now(WIB).strftime("%A, %d %B %Y - %H:%M WIB")
 
     # Extract Channel & Voice Channel info from ctx_obj
@@ -443,7 +547,45 @@ async def process_with_mcp_tools(
         f"{user_question}"
     )
 
-    messages.append({"role": "user", "content": dynamic_user_prompt})
+    all_tools = []
+    if getattr(bot, "ai_tools", None):
+        all_tools.extend(bot.ai_tools)
+    if getattr(bot, "cached_mcp_tools", None):
+        all_tools.extend(bot.cached_mcp_tools)
+    sanitized_tools = sanitize_tools_list(all_tools)
+    prompt_overhead_tokens = sum(
+        [
+            await count_token(SYSTEM_PROMPT),
+            await count_token(dynamic_user_prompt),
+            await count_token(json.dumps(sanitized_tools, ensure_ascii=False)),
+        ]
+    )
+    context_window, history_budget, _ = await get_context_budget(prompt_overhead_tokens)
+    summary, recent_messages, history_tokens = await get_conversation_context(
+        user_id,
+        channel_id,
+        prompt_overhead_tokens=prompt_overhead_tokens,
+    )
+    logger.info(
+        "Prepared inference context (model=%s, context_window=%s, history_tokens=%s, history_budget=%s, tools=%s)",
+        LLM_MODEL_NAME,
+        context_window,
+        history_tokens,
+        history_budget,
+        len(sanitized_tools),
+    )
+
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    if summary:
+        messages.append(
+            {
+                "role": "system",
+                "content": f"<past_conversation_summary>\n{summary}\n</past_conversation_summary>",
+            }
+        )
+    messages.extend(recent_messages)
+    current_user_message = {"role": "user", "content": dynamic_user_prompt}
+    messages.append(current_user_message)
 
     used_tools = False
     total_prompt_tokens = 0
@@ -453,39 +595,50 @@ async def process_with_mcp_tools(
     if ctx_obj and hasattr(ctx_obj, "guild") and ctx_obj.guild:
         guild_id = ctx_obj.guild.id
 
-    for iteration in range(max_iterations):
-        all_tools = []
-        if getattr(bot, "ai_tools", None):
-            all_tools.extend(bot.ai_tools)
-        if getattr(bot, "cached_mcp_tools", None):
-            all_tools.extend(bot.cached_mcp_tools)
-        local_tool_names = set(getattr(bot, "local_tool_handlers", {}))
-        local_tools = getattr(bot, "ai_tools", [])
-        parallel_safe_tools = {
-            tool["function"]["name"]
-            for tool in local_tools
-            if tool.get("readOnlyHint") is True
-        }
-        parallel_safe_tools.update(
-            tool["function"]["name"]
-            for tool in getattr(bot, "cached_mcp_tools", [])
-            if tool.get("readOnlyHint") is True
-            and tool["function"]["name"] not in local_tool_names
-        )
+    local_tool_names = set(getattr(bot, "local_tool_handlers", {}))
+    local_tools = getattr(bot, "ai_tools", [])
+    parallel_safe_tools = {
+        tool["function"]["name"]
+        for tool in local_tools
+        if tool.get("readOnlyHint") is True
+    }
+    parallel_safe_tools.update(
+        tool["function"]["name"]
+        for tool in getattr(bot, "cached_mcp_tools", [])
+        if tool.get("readOnlyHint") is True
+        and tool["function"]["name"] not in local_tool_names
+    )
+    tool_schemas = {
+        tool["function"]["name"]: tool["function"].get("parameters", {})
+        for tool in sanitized_tools
+        if isinstance(tool, dict)
+        and isinstance(tool.get("function"), dict)
+        and isinstance(tool["function"].get("name"), str)
+    }
+    tool_result_tokens_remaining = TOOL_RESULT_TOKENS
 
+    for iteration in range(max_iterations):
         kwargs = {
             "model": LLM_MODEL_NAME,
             "messages": messages,
             "temperature": 0.7,
             "top_p": 0.95,
-            "max_completion_tokens": 1024,
+            "max_completion_tokens": MAX_COMPLETION_TOKENS,
         }
         # On the last iteration, omit tools to force the model to summarize existing data into text
-        if all_tools and iteration < (max_iterations - 1):
-            kwargs["tools"] = sanitize_tools_list(all_tools)
+        if sanitized_tools and iteration < (max_iterations - 1):
+            kwargs["tools"] = sanitized_tools
             # Chat Completions providers reject reasoning models with tools
             # unless reasoning is explicitly disabled.
             kwargs["reasoning_effort"] = "none"
+
+        await _trim_history_for_request(
+            messages,
+            current_user_message,
+            kwargs.get("tools", []),
+            context_window,
+            MAX_COMPLETION_TOKENS,
+        )
 
         try:
             response = await ai_client.chat.completions.create(**kwargs)
@@ -497,9 +650,25 @@ async def process_with_mcp_tools(
 
             choice = response.choices[0]
             message = choice.message
+            logger.info(
+                "Inference iteration completed (iteration=%s, finish_reason=%s, prompt_tokens=%s, completion_tokens=%s)",
+                iteration + 1,
+                choice.finish_reason,
+                getattr(getattr(response, "usage", None), "prompt_tokens", None),
+                getattr(getattr(response, "usage", None), "completion_tokens", None),
+            )
+            if choice.finish_reason == "length":
+                logger.warning(
+                    "Inference output reached its completion token limit (iteration=%s)",
+                    iteration + 1,
+                )
 
             # Check if the model wants to call a tool
             if message.tool_calls and iteration < (max_iterations - 1):
+                logger.info(
+                    "Model requested tool calls (tools=%s)",
+                    [call.function.name for call in message.tool_calls],
+                )
                 used_tools = True
                 messages.append(message)
 
@@ -512,7 +681,9 @@ async def process_with_mcp_tools(
                             arguments = json.loads(args) if args.strip() else {}
                         except (json.JSONDecodeError, TypeError) as json_err:
                             logger.warning(
-                                f"Malformed JSON arguments from model for tool '{tool_name}': {args} | Error: {json_err}"
+                                "Model returned malformed JSON tool arguments (tool=%s, error=%s)",
+                                tool_name,
+                                json_err,
                             )
                             calls.append(
                                 {
@@ -526,9 +697,42 @@ async def process_with_mcp_tools(
                     elif isinstance(args, dict):
                         arguments = args
                     else:
-                        arguments = {}
+                        calls.append(
+                            {
+                                "tool_call": tool_call,
+                                "tool_name": tool_name,
+                                "arguments": {},
+                                "error": ValueError(
+                                    "tool arguments must be a JSON object"
+                                ),
+                            }
+                        )
+                        continue
 
-                    logger.info(f"Executing tool: {tool_name} with args: {arguments}")
+                    schema = tool_schemas.get(tool_name)
+                    if schema is None:
+                        calls.append(
+                            {
+                                "tool_call": tool_call,
+                                "tool_name": tool_name,
+                                "arguments": arguments,
+                                "error": ValueError("unknown tool name"),
+                            }
+                        )
+                        continue
+                    validation_error = _validate_schema_value(arguments, schema)
+                    if validation_error:
+                        calls.append(
+                            {
+                                "tool_call": tool_call,
+                                "tool_name": tool_name,
+                                "arguments": arguments,
+                                "error": ValueError(validation_error),
+                            }
+                        )
+                        continue
+
+                    logger.info("Executing tool (tool=%s)", tool_name)
                     calls.append(
                         {
                             "tool_call": tool_call,
@@ -538,13 +742,39 @@ async def process_with_mcp_tools(
                         }
                     )
 
-                # Only explicitly read-only tools are run concurrently. Keep
-                # mutations and unknown MCP tools ordered as requested.
+                # Run only explicitly read-only calls concurrently; preserve mutation order.
                 results = await _execute_tool_calls(
                     bot, calls, parallel_safe_tools, ctx_obj
                 )
 
-                for call, result in zip(calls, results, strict=True):
+                bounded_results = []
+                for result in results:
+                    result = str(result)
+                    result_tokens = await count_token(result)
+                    if result_tokens > tool_result_tokens_remaining:
+                        suffix = "\n[Tool result truncated to fit the context budget.]"
+                        low, high = 0, len(result)
+                        while low < high:
+                            midpoint = (low + high + 1) // 2
+                            candidate = result[:midpoint] + suffix
+                            if (
+                                await count_token(candidate)
+                                <= tool_result_tokens_remaining
+                            ):
+                                low = midpoint
+                            else:
+                                high = midpoint - 1
+                        result = result[:low] + suffix
+                        result_tokens = await count_token(result)
+                        if result_tokens > tool_result_tokens_remaining:
+                            result = ""
+                            result_tokens = 0
+                    tool_result_tokens_remaining = max(
+                        0, tool_result_tokens_remaining - result_tokens
+                    )
+                    bounded_results.append(result)
+
+                for call, result in zip(calls, bounded_results, strict=True):
                     tool_call = call["tool_call"]
                     tool_name = call["tool_name"]
 
@@ -574,13 +804,17 @@ async def process_with_mcp_tools(
                             "..." if len(str(result)) > 100 else ""
                         )
 
-                    logger.info(f"Tool '{tool_name}' result: {log_msg}")
+                    logger.info(
+                        "Tool execution completed (tool=%s, result=%s)",
+                        tool_name,
+                        log_msg,
+                    )
 
                 continue
             else:
                 reply = (
                     message.content
-                    or "Maaf, Nexo belum memiliki respon untuk hal tersebut."
+                    or "Nexo could not generate a response for this request."
                 )
 
                 # Fallback estimation if usage was not returned
@@ -641,7 +875,7 @@ async def process_with_mcp_tools(
             logger.exception("Unexpected error in process_with_mcp_tools")
             elapsed_s = time.perf_counter() - start_time
             return (
-                "Maaf, Nexo mengalami kendala teknis saat memproses permintaanmu. Silakan coba sesaat lagi ya! 🤖",
+                "Nexo encountered a technical issue while processing this request. Please try again shortly. 🤖",
                 False,
                 {},
                 elapsed_s,
@@ -649,7 +883,7 @@ async def process_with_mcp_tools(
 
     elapsed_s = time.perf_counter() - start_time
     return (
-        "I've tried using tools but couldn't complete your request. Please try again or rephrase your question.",
+        "Nexo could not complete the request using the available tools. Please try again or rephrase the request.",
         used_tools,
         {},
         elapsed_s,

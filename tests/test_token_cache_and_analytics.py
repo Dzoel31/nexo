@@ -3,13 +3,13 @@ import asyncio
 import pytest
 from sqlalchemy import text
 
-from db.repository import (
-    count_token,
+from db.repositories.token_usage import (
     get_guild_token_leaderboard,
     get_user_token_stats,
     log_token_usage,
 )
 from db.session import async_session
+from services.llm.token_counter import count_token
 from tests.conftest import requires_postgres
 
 

@@ -6,7 +6,7 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
-from db.repository import (
+from db.repositories.competition import (
     create_competition,
     delete_competition,
     get_competition_by_id,

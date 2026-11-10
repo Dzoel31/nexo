@@ -4,13 +4,9 @@ import pytest
 from sqlalchemy import text
 
 from db.models import MessageRole
-from db.repository import (
-    CONVERSATION_TTL,
-    get_conversation_context,
-    get_or_create_conversation,
-    save_message,
-)
+from db.repositories.conversation import CONVERSATION_TTL, get_or_create_conversation
 from db.session import async_session
+from services.llm.context import get_conversation_context, save_message
 from tests.conftest import requires_postgres
 
 
