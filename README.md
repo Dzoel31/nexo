@@ -83,7 +83,7 @@ nexo/
 │   └── webhook_deploy.py       # Dispatcher notifikasi webhook & trigger Portainer
 ├── db/                         # Layer Database
 │   ├── models.py               # Definisi model SQLAlchemy (ScheduledEvent, TokenLog, dll.)
-│   ├── repository.py           # Operasi database & query parameterized
+│   ├── repositories/           # Database query dan persistence modules
 │   └── session.py              # Konfigurasi async engine & sessionmaker (asyncpg)
 ├── migrations/                 # Migrasi database Alembic
 │   ├── env.py

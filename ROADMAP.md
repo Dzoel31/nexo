@@ -100,7 +100,7 @@ Berdasarkan pertimbangan perangkat keras (4 Core CPU, sisa RAM 5 GB), pengembang
 
 **AGENT & INFERENCE**
 - [x] Buat *Context & Date Resolver* (Pydantic & Dynamic System Context).
-- [x] Rombak *in-memory history* menjadi modul Database PostgreSQL *async* dengan sistem *Rolling Summaries* & *24-Hour Sliding TTL Expiration* (`db/repository.py`).
+- [x] Rombak *in-memory history* menjadi modul Database PostgreSQL *async* dengan sistem *Rolling Summaries* & *24-Hour Sliding TTL Expiration* (`db/repositories/` dan `services/llm/context.py`).
 - [x] Validasi *context length* maksimal 8,192 token sebelum request dikirim ke llama-server (dengan batasan karakter & rolling history limit).
 - [x] Implementasi **Multi-Hop & Multi-Tool Calling Loop** (iterative max 3 iterations dengan sanitasi skema).
 - [x] Implementasi **Pydantic Token-Efficient Schema Cleaner** (`get_clean_schema`) untuk membuang metadata `$defs` dan `title` agar menghemat token prompt.
