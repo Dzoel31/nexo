@@ -8,7 +8,7 @@ import aiohttp
 import discord
 from mcp import ClientSession
 from mcp.client.sse import sse_client
-from openai import AsyncOpenAI
+from openai import APIError, AsyncOpenAI
 
 from config.settings import settings
 from db.models import MessageRole
@@ -20,10 +20,16 @@ from services.llm.token_counter import (
     TOOL_RESULT_TOKENS,
     count_token,
     get_context_budget,
+    get_prompt_estimate_safety_margin,
+    record_prompt_token_usage,
 )
 
 logger = logging.getLogger("mcp_client")
 WIB = timezone(timedelta(hours=7))
+LLM_HEALTH_CACHE_TTL_SECONDS = 10.0
+LLM_HEALTH_FAILURE_CACHE_TTL_SECONDS = 2.0
+_LLM_HEALTH_CACHE: tuple[float, bool, str] | None = None
+_LLM_HEALTH_CHECK_LOCK = asyncio.Lock()
 
 # ---------------------------------------------------------
 # CONFIGURATION & CONSTANTS
@@ -32,6 +38,7 @@ LLM_BASE_URL = settings.LLM_BASE_URL
 LLM_API_KEY = settings.LLM_API_KEY.strip("\"' \r\n")
 LLM_MODEL_NAME = settings.LLM_MODEL_NAME
 MCP_SERVER_URL = settings.MCP_SERVER_URL
+MCP_TOOL_TIMEOUT_SECONDS = 30.0
 
 # Load System Prompt
 try:
@@ -213,7 +220,7 @@ async def execute_mcp_tool(tool_name: str, arguments: dict) -> str:
     candidates = [MCP_SERVER_URL.rstrip("/") + "/sse"]
     for url in candidates:
         try:
-            async with asyncio.timeout(30):
+            async with asyncio.timeout(MCP_TOOL_TIMEOUT_SECONDS):
                 async with sse_client(url) as (read_stream, write_stream):
                     async with ClientSession(read_stream, write_stream) as session:
                         await session.initialize()
@@ -236,10 +243,12 @@ async def execute_mcp_tool(tool_name: str, arguments: dict) -> str:
                         return str(result)
         except TimeoutError:
             logger.error(
-                "MCP tool call timed out (tool=%s, timeout_seconds=30)", tool_name
+                "MCP tool call timed out (tool=%s, timeout_seconds=%s)",
+                tool_name,
+                MCP_TOOL_TIMEOUT_SECONDS,
             )
             raise RuntimeError(
-                f"Tool '{tool_name}' exceeded the 30-second timeout."
+                f"Tool '{tool_name}' exceeded the {MCP_TOOL_TIMEOUT_SECONDS}-second timeout."
             ) from None
         except aiohttp.ClientError, OSError, RuntimeError, ValueError:
             logger.exception(
@@ -304,17 +313,25 @@ async def check_services_health():
 
 async def check_llm_health():
     """Check the configured provider through its OpenAI-compatible models API."""
-    try:
-        client = ai_client.with_options(timeout=2.0)
-        await client.models.list()
-    except Exception as error:  # noqa: BLE001
-        logger.warning("LLM provider health check failed: %s", error)
-        return (
-            False,
-            f"**LLM provider** is unavailable. Error: {error}",
-        )
+    global _LLM_HEALTH_CACHE
 
-    return True, "LLM provider is online"
+    async with _LLM_HEALTH_CHECK_LOCK:
+        now = time.monotonic()
+        if _LLM_HEALTH_CACHE and now < _LLM_HEALTH_CACHE[0]:
+            return _LLM_HEALTH_CACHE[1], _LLM_HEALTH_CACHE[2]
+
+        try:
+            client = ai_client.with_options(timeout=2.0)
+            await client.models.list()
+            result = (True, "LLM provider is online")
+            cache_ttl = LLM_HEALTH_CACHE_TTL_SECONDS
+        except (APIError, TimeoutError) as error:
+            logger.warning("LLM provider health check failed: %s", error)
+            result = (False, f"**LLM provider** is unavailable. Error: {error}")
+            cache_ttl = LLM_HEALTH_FAILURE_CACHE_TTL_SECONDS
+
+        _LLM_HEALTH_CACHE = (time.monotonic() + cache_ttl, *result)
+        return result
 
 
 async def _run_tool_handler(bot, tool_name: str, arguments: dict, ctx_obj) -> str:
@@ -400,6 +417,34 @@ def _validate_schema_value(value, schema: dict, path: str = "arguments") -> str 
     return None
 
 
+def _validate_tool_arguments(
+    tool_name: str, arguments: dict, tool_schemas: dict[str, dict]
+) -> str | None:
+    """Reject unregistered tools and validate arguments against the declared schema."""
+    schema = tool_schemas.get(tool_name)
+    if schema is None:
+        return f"Unknown tool name: {tool_name}"
+    return _validate_schema_value(arguments, schema)
+
+
+def _log_prompt_token_comparison(
+    iteration: int, local_estimate: int, provider_usage: int | None
+) -> int | None:
+    """Log the difference between local prompt estimates and provider usage."""
+    if provider_usage is None:
+        return None
+    delta = record_prompt_token_usage(local_estimate, provider_usage)
+    logger.info(
+        "Prompt token estimate comparison (iteration=%s, local_estimate=%s, provider_usage=%s, undercount=%s, safety_margin=%s)",
+        iteration,
+        local_estimate,
+        provider_usage,
+        delta,
+        get_prompt_estimate_safety_margin(),
+    )
+    return provider_usage - local_estimate
+
+
 async def _trim_history_for_request(
     messages: list,
     current_user_message: dict,
@@ -408,6 +453,9 @@ async def _trim_history_for_request(
     completion_reserve: int,
 ) -> int:
     """Trim oldest persisted context until the serialized request fits its budget."""
+    request_budget = (
+        context_window - completion_reserve - get_prompt_estimate_safety_margin()
+    )
     tool_tokens = (
         await count_token(json.dumps(tools, ensure_ascii=False)) if tools else 0
     )
@@ -428,7 +476,7 @@ async def _trim_history_for_request(
         request_tokens = tool_tokens
         for serialized in serialized_messages:
             request_tokens += await count_token(serialized)
-        if request_tokens + completion_reserve <= context_window:
+        if request_tokens <= request_budget:
             return request_tokens
 
         user_index = next(
@@ -439,8 +487,9 @@ async def _trim_history_for_request(
         if user_index <= 1:
             logger.warning(
                 "Request exceeds the model input budget after conversation history was removed "
-                "(estimated_tokens=%s, context_window=%s)",
+                "(estimated_tokens=%s, request_budget=%s, context_window=%s)",
                 request_tokens,
+                request_budget,
                 context_window,
             )
             raise ValueError(
@@ -492,6 +541,20 @@ async def _execute_tool_calls(
             )
             index += 1
     return results
+
+
+def _append_tool_results(messages: list, calls: list[dict], results: list[str]) -> None:
+    """Append tool results in call order using each original call identifier."""
+    for call, result in zip(calls, results, strict=True):
+        tool_call = call["tool_call"]
+        messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": tool_call.id,
+                "name": call["tool_name"],
+                "content": result,
+            }
+        )
 
 
 async def process_with_mcp_tools(
@@ -632,7 +695,7 @@ async def process_with_mcp_tools(
             # unless reasoning is explicitly disabled.
             kwargs["reasoning_effort"] = "none"
 
-        await _trim_history_for_request(
+        estimated_prompt_tokens = await _trim_history_for_request(
             messages,
             current_user_message,
             kwargs.get("tools", []),
@@ -656,6 +719,12 @@ async def process_with_mcp_tools(
                 choice.finish_reason,
                 getattr(getattr(response, "usage", None), "prompt_tokens", None),
                 getattr(getattr(response, "usage", None), "completion_tokens", None),
+            )
+            provider_prompt_tokens = getattr(
+                getattr(response, "usage", None), "prompt_tokens", None
+            )
+            _log_prompt_token_comparison(
+                iteration + 1, estimated_prompt_tokens, provider_prompt_tokens
             )
             if choice.finish_reason == "length":
                 logger.warning(
@@ -709,18 +778,9 @@ async def process_with_mcp_tools(
                         )
                         continue
 
-                    schema = tool_schemas.get(tool_name)
-                    if schema is None:
-                        calls.append(
-                            {
-                                "tool_call": tool_call,
-                                "tool_name": tool_name,
-                                "arguments": arguments,
-                                "error": ValueError("unknown tool name"),
-                            }
-                        )
-                        continue
-                    validation_error = _validate_schema_value(arguments, schema)
+                    validation_error = _validate_tool_arguments(
+                        tool_name, arguments, tool_schemas
+                    )
                     if validation_error:
                         calls.append(
                             {
@@ -774,18 +834,9 @@ async def process_with_mcp_tools(
                     )
                     bounded_results.append(result)
 
+                _append_tool_results(messages, calls, bounded_results)
                 for call, result in zip(calls, bounded_results, strict=True):
-                    tool_call = call["tool_call"]
                     tool_name = call["tool_name"]
-
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": tool_call.id,
-                            "name": tool_name,
-                            "content": result,
-                        }
-                    )
                     try:
                         parsed = json.loads(result)
                         if isinstance(parsed, list):

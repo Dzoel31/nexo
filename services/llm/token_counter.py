@@ -1,8 +1,9 @@
 import asyncio
 import hashlib
 import logging
+import math
 import threading
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from urllib.parse import quote, urlsplit, urlunsplit
 
 import aiohttp
@@ -29,6 +30,11 @@ ai_client = AsyncOpenAI(
 MAX_COMPLETION_TOKENS = 1024
 TOOL_BUFFER_TOKENS = 1200
 TOOL_RESULT_TOKENS = 800
+PROMPT_ESTIMATE_MIN_SAMPLES = 10
+PROMPT_ESTIMATE_HISTORY_SIZE = 50
+PROMPT_ESTIMATE_MAX_MARGIN = 512
+_PROMPT_ESTIMATE_SAFETY_MARGIN = 128
+_PROMPT_ESTIMATE_GAPS: deque[int] = deque(maxlen=PROMPT_ESTIMATE_HISTORY_SIZE)
 
 _TOKEN_CACHE: OrderedDict[str, int] = OrderedDict()
 _MAX_CACHE_SIZE = 1000
@@ -66,12 +72,26 @@ class TokenCounter:
             )
         else:
             self.backend = "transformers"
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                model_name,
-                use_fast=True,
-                token=HF_TOKEN or None,
-                local_files_only=HF_HUB_OFFLINE,
-            )
+            tokenizer_options = {"use_fast": True, "token": HF_TOKEN or None}
+            try:
+                self.tokenizer = AutoTokenizer.from_pretrained(
+                    model_name,
+                    **tokenizer_options,
+                    local_files_only=True,
+                )
+            except OSError as cache_error:
+                if HF_HUB_OFFLINE:
+                    raise
+                logger.info(
+                    "Tokenizer cache miss; trying Hugging Face download (model=%s, error=%s)",
+                    model_name,
+                    cache_error,
+                )
+                self.tokenizer = AutoTokenizer.from_pretrained(
+                    model_name,
+                    **tokenizer_options,
+                    local_files_only=False,
+                )
             if not getattr(self.tokenizer, "chat_template", None):
                 raise ValueError(
                     f"Tokenizer '{model_name}' has no chat_template. "
@@ -205,6 +225,47 @@ def _model_info_url() -> str:
     return urlunsplit((parts.scheme, parts.netloc, path, "", ""))
 
 
+def parse_litellm_model_metadata(
+    payload: dict, model_name: str
+) -> tuple[str | None, int | None]:
+    """Extract tokenizer repository and input limit for one configured model."""
+    entries = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(entries, list):
+        raise TypeError("LiteLLM model info response is missing its data list")
+
+    entry = next(
+        (
+            item
+            for item in entries
+            if isinstance(item, dict) and item.get("model_name") == model_name
+        ),
+        None,
+    )
+    if entry is None:
+        raise ValueError(f"LiteLLM returned no metadata for '{model_name}'")
+
+    params = entry.get("litellm_params")
+    if not isinstance(params, dict):
+        params = {}
+    model_info = entry.get("model_info")
+    if not isinstance(model_info, dict):
+        model_info = {}
+
+    tokenizer_model = params.get("tokenizer_with_hf_repo")
+    if not isinstance(tokenizer_model, str) or not tokenizer_model.strip():
+        tokenizer_model = None
+
+    context_window = model_info.get("max_input_tokens")
+    if (
+        not isinstance(context_window, int)
+        or isinstance(context_window, bool)
+        or context_window <= 0
+    ):
+        context_window = None
+
+    return tokenizer_model.strip() if tokenizer_model else None, context_window
+
+
 async def _resolve_tokenizer_model() -> str:
     """Resolve the tokenizer name using cached LiteLLM model metadata."""
     await _resolve_model_metadata()
@@ -244,33 +305,12 @@ async def _resolve_model_metadata() -> None:
                 response.raise_for_status()
                 payload = await response.json()
 
-            entries = payload.get("data") if isinstance(payload, dict) else None
-            if not isinstance(entries, list):
-                raise TypeError("LiteLLM model info response is missing its data list")
-            entry = next(
-                (
-                    item
-                    for item in entries
-                    if isinstance(item, dict)
-                    and item.get("model_name") == LLM_MODEL_NAME
-                ),
-                None,
+            tokenizer_model, context_window = parse_litellm_model_metadata(
+                payload, LLM_MODEL_NAME
             )
-            if entry is None:
-                raise ValueError(f"LiteLLM returned no metadata for '{LLM_MODEL_NAME}'")
-
-            params = entry.get("litellm_params") or {}
-            model_info = entry.get("model_info") or {}
-            tokenizer_model = params.get("tokenizer_with_hf_repo")
-            context_window = model_info.get("max_input_tokens")
-
-            if isinstance(tokenizer_model, str) and tokenizer_model.strip():
-                _RESOLVED_TOKENIZER_MODEL = tokenizer_model.strip()
-            if (
-                isinstance(context_window, int)
-                and not isinstance(context_window, bool)
-                and context_window > 0
-            ):
+            if tokenizer_model:
+                _RESOLVED_TOKENIZER_MODEL = tokenizer_model
+            if context_window:
                 _RESOLVED_CONTEXT_WINDOW = context_window
 
             logger.info(
@@ -308,9 +348,32 @@ async def get_context_budget(
         context_window
         - MAX_COMPLETION_TOKENS
         - max(0, prompt_overhead_tokens)
+        - get_prompt_estimate_safety_margin()
         - max(0, tool_buffer_tokens),
     )
     return context_window, history_budget, int(history_budget * 0.40)
+
+
+def get_prompt_estimate_safety_margin() -> int:
+    """Return the current bounded margin for request-serialization overhead."""
+    return _PROMPT_ESTIMATE_SAFETY_MARGIN
+
+
+def record_prompt_token_usage(local_estimate: int, provider_usage: int) -> int:
+    """Learn a conservative prompt margin after enough provider observations."""
+    global _PROMPT_ESTIMATE_SAFETY_MARGIN
+
+    gap = max(0, provider_usage - local_estimate)
+    _PROMPT_ESTIMATE_GAPS.append(gap)
+    if len(_PROMPT_ESTIMATE_GAPS) >= PROMPT_ESTIMATE_MIN_SAMPLES:
+        sorted_gaps = sorted(_PROMPT_ESTIMATE_GAPS)
+        p95_index = max(0, math.ceil(0.95 * len(sorted_gaps)) - 1)
+        observed_p95 = sorted_gaps[p95_index]
+        _PROMPT_ESTIMATE_SAFETY_MARGIN = min(
+            PROMPT_ESTIMATE_MAX_MARGIN,
+            max(128, observed_p95 + 64),
+        )
+    return gap
 
 
 async def count_token(text_content: str) -> int:
