@@ -14,27 +14,8 @@ logger = logging.getLogger("cogs.webhook_deploy")
 
 
 def build_portainer_webhooks() -> dict[str, str]:
-    """Reads Portainer webhook URLs from config/projects.json and environment variables."""
+    """Read Portainer webhook URLs from the project configuration."""
     portainer_webhooks: dict[str, str] = {}
-
-    # 1. Read from environment variable PORTAINER_WEBHOOKS (json format or semicolon separated)
-    raw_env = settings.PORTAINER_WEBHOOKS.strip()
-    if raw_env:
-        if raw_env.startswith("{"):
-            try:
-                parsed = json.loads(raw_env)
-                if isinstance(parsed, dict):
-                    for k, v in parsed.items():
-                        portainer_webhooks[str(k)] = str(v).strip()
-            except json.JSONDecodeError:
-                logger.warning("Failed to parse PORTAINER_WEBHOOKS as JSON")
-        else:
-            for entry in raw_env.split(";"):
-                if "=" in entry:
-                    k, v = entry.split("=", 1)
-                    portainer_webhooks[k.strip()] = v.strip()
-
-    # 2. Read from config/projects.json
     projects_config_path = Path("config/projects.json")
     if projects_config_path.exists():
         try:

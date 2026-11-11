@@ -25,13 +25,12 @@ Gunakan ID Snowflake Discord untuk pengaturan channel dan role.
 | `HF_TOKEN` | Token Hugging Face read-only opsional untuk mengunduh tokenizer private/gated yang ditunjuk metadata LiteLLM. Token ini terpisah dari `LLM_API_KEY`. |
 | `LLM_MODEL_NAME` | Nama model atau deployment yang dikirim pada request LLM. Untuk Azure, nama deployment yang tidak menyerupai nama model yang dikenal bisa membuat penghitung token memakai fallback perkiraan. |
 | `MCP_SERVER_URL` | Base URL MCP Server; Nexo menambahkan `/sse` untuk koneksi tools. Jangan tambahkan `/sse`. |
-| `TOTAL_CONTEXT_WINDOW` | Fallback context window jika metadata LiteLLM tidak menyediakan `model_info.max_input_tokens`. Default `8192`. |
+| `TOTAL_CONTEXT_WINDOW` | Batas maksimum context window Nexo. Metadata LiteLLM dapat menetapkan batas lebih rendah, tetapi tidak dapat menaikkannya. Juga menjadi fallback jika metadata tidak tersedia. Default `8192`. |
 | `HF_HUB_OFFLINE` | Set `true` untuk memuat tokenizer hanya dari cache Hugging Face lokal. Pastikan tokenizer sudah tersedia di cache sebelum mengaktifkannya; bila tidak, Nexo memakai penghitung token perkiraan. Default `false`. |
 | `MAX_GROUP_CONTEXT_CHARS` | Batas karakter riwayat channel yang dibaca saat Nexo disebut di percakapan grup. Default `10000`. |
 | `GITHUB_SECRET` | Secret HMAC SHA-256 untuk validasi GitHub webhook. |
 | `PORT` / `HOST` | Port dan host proses aplikasi. Default `8000` dan `0.0.0.0`. |
 | `WEBHOOK_PORT` | Port gateway FastAPI webhook. Default `8000`. |
-| `PORTAINER_WEBHOOKS` | Pemetaan project ke webhook Portainer dalam JSON atau daftar dipisahkan titik koma. |
 | `WEBHOOK_DEVLOGS_CHANNEL` | URL webhook Discord untuk mengirim notifikasi devlog. |
 | `WEBHOOK_DEVLOGS_CHANNEL_ID` | ID channel devlog untuk notifikasi yang dikirim melalui bot. |
 | `WEBHOOK_RELEASE_NOTES_CHANNEL_ID` | ID channel release notes. |

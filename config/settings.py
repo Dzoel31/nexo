@@ -67,7 +67,6 @@ class Settings(BaseSettings):
         default=None, validation_alias="GOOGLE_CALENDAR_ID"
     )
 
-    PORTAINER_WEBHOOKS: str = Field(default="", validation_alias="PORTAINER_WEBHOOKS")
     WEBHOOK_DEVLOGS_CHANNEL: str = Field(
         default="", validation_alias="WEBHOOK_DEVLOGS_CHANNEL"
     )
