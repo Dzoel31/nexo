@@ -2,6 +2,14 @@
 
 <!-- version list -->
 
+## v1.19.1 (2026-11-11)
+
+### Bug Fixes
+
+- **llm**: Use configured model for compaction
+  ([`289e119`](https://github.com/ksm-aiot-upnvj/nexo/commit/289e119c0160d08bf1812538817120099a1c2b0a))
+
+
 ## v1.19.0 (2026-11-11)
 
 ### Bug Fixes
