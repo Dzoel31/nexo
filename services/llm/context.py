@@ -108,6 +108,7 @@ async def check_and_trigger_rolling_summary(
 ):
     """Compact old conversation messages and persist the generated rolling summary."""
     end_callback_required = False
+    compaction_succeeded = False
 
     async def compact(conv_row, sorted_messages):
         nonlocal end_callback_required
@@ -201,6 +202,7 @@ async def check_and_trigger_rolling_summary(
     try:
         result = await _compact_conversation(user_id, channel_id, compact)
         if result:
+            compaction_succeeded = True
             logger.info(
                 "Rolling summary completed for user %s. Summarized & purged %s messages (~%s tokens saved).",
                 user_id,
@@ -214,8 +216,8 @@ async def check_and_trigger_rolling_summary(
     finally:
         if end_callback_required and callable(on_compaction_end):
             try:
-                result = on_compaction_end()
-                if inspect.isawaitable(result):
-                    await result
+                callback_result = on_compaction_end(compaction_succeeded)
+                if inspect.isawaitable(callback_result):
+                    await callback_result
             except Exception as cb_err:  # noqa: BLE001
                 logger.warning("Error in on_compaction_end callback: %s", cb_err)

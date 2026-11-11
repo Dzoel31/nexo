@@ -226,10 +226,12 @@ class AgentOrchestrator(commands.Cog):
                             # Live Footer Compaction Update (Opsi B)
                             base_footer = footer_text
 
-                            async def on_compaction_start(ctx_obj=ctx_obj):
+                            async def on_compaction_start(
+                                ctx_obj=ctx_obj, base_footer=base_footer
+                            ):
                                 try:
                                     embed.set_footer(  # noqa: B023
-                                        text=f"{base_footer} • 🧠 Summarizing memory..."  # noqa: B023
+                                        text=f"{base_footer} • 🧠 Nexo sedang merangkum percakapan..."
                                     )
                                     if is_interaction and hasattr(  # noqa: B023
                                         ctx_obj,
@@ -245,10 +247,18 @@ class AgentOrchestrator(commands.Cog):
                                         f"Failed to update compaction start footer: {cb_err}"
                                     )
 
-                            async def on_compaction_end(ctx_obj=ctx_obj):
+                            async def on_compaction_end(
+                                succeeded: bool,
+                                ctx_obj=ctx_obj,
+                                base_footer=base_footer,
+                            ):
                                 try:
                                     embed.set_footer(  # noqa: B023
-                                        text=f"{base_footer} • 🧠 Memory compacted"  # noqa: B023
+                                        text=(
+                                            f"{base_footer} • 🧠 Riwayat percakapan diringkas"
+                                            if succeeded
+                                            else f"{base_footer} • ⚠️ Ringkasan percakapan gagal"
+                                        )
                                     )
                                     if is_interaction and hasattr(  # noqa: B023
                                         ctx_obj,
