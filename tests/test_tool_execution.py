@@ -1,4 +1,5 @@
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
@@ -182,6 +183,49 @@ async def test_request_budget_trims_oldest_history_and_rejects_unfit_prompt(
         await mcp_client._trim_history_for_request(
             messages, oversized_prompt, [], context_window=100, completion_reserve=0
         )
+
+
+@pytest.mark.asyncio
+async def test_large_tool_result_uses_remaining_context_and_keeps_json_valid(
+    monkeypatch,
+):
+    async def count_characters(text):
+        return len(text)
+
+    monkeypatch.setattr(mcp_client, "count_token", count_characters)
+    monkeypatch.setattr(mcp_client, "get_prompt_estimate_safety_margin", lambda: 0)
+    system_message = {"role": "system", "content": "system"}
+    old_history = {"role": "user", "content": "old history " * 35}
+    current_user_message = {"role": "user", "content": "current question"}
+    assistant_tool_call = {"role": "assistant", "content": "calling tool"}
+    tool_result = {
+        "role": "tool",
+        "tool_call_id": "call-1",
+        "name": "lookup",
+        "content": json.dumps({"items": ["entry " * 60]}, ensure_ascii=False),
+    }
+    messages = [
+        system_message,
+        old_history,
+        current_user_message,
+        assistant_tool_call,
+        tool_result,
+    ]
+
+    estimate = await mcp_client._trim_history_for_request(
+        messages,
+        current_user_message,
+        [],
+        context_window=480,
+        completion_reserve=0,
+    )
+
+    assert old_history not in messages
+    assert tool_result in messages
+    assert estimate <= 480
+    parsed_result = json.loads(tool_result["content"])
+    assert parsed_result["truncated"] is True
+    assert "preview" in parsed_result
 
 
 @pytest.mark.asyncio

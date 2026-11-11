@@ -29,7 +29,6 @@ ai_client = AsyncOpenAI(
 
 MAX_COMPLETION_TOKENS = 1024
 TOOL_BUFFER_TOKENS = 1200
-TOOL_RESULT_TOKENS = 800
 PROMPT_ESTIMATE_MIN_SAMPLES = 10
 PROMPT_ESTIMATE_HISTORY_SIZE = 50
 PROMPT_ESTIMATE_MAX_MARGIN = 512
@@ -272,6 +271,11 @@ async def _resolve_tokenizer_model() -> str:
     return _RESOLVED_TOKENIZER_MODEL or LLM_MODEL_NAME
 
 
+def _effective_context_window() -> int:
+    """Apply the configured hard cap to the provider-reported context limit."""
+    return min(_RESOLVED_CONTEXT_WINDOW or TOTAL_CONTEXT_WINDOW, TOTAL_CONTEXT_WINDOW)
+
+
 async def _resolve_model_metadata() -> None:
     """Load tokenizer and input-context metadata once per process."""
     global _MODEL_METADATA_RESOLVED, _RESOLVED_CONTEXT_WINDOW
@@ -314,9 +318,10 @@ async def _resolve_model_metadata() -> None:
                 _RESOLVED_CONTEXT_WINDOW = context_window
 
             logger.info(
-                "Resolved LiteLLM metadata (model=%s, context_window=%s, tokenizer=%s)",
+                "Resolved LiteLLM metadata (model=%s, provider_context_window=%s, effective_context_window=%s, tokenizer=%s)",
                 LLM_MODEL_NAME,
-                _RESOLVED_CONTEXT_WINDOW or TOTAL_CONTEXT_WINDOW,
+                _RESOLVED_CONTEXT_WINDOW,
+                _effective_context_window(),
                 _RESOLVED_TOKENIZER_MODEL or LLM_MODEL_NAME,
             )
         except (aiohttp.ClientError, TimeoutError, TypeError, ValueError) as error:
@@ -342,7 +347,7 @@ async def get_context_budget(
 ) -> tuple[int, int, int]:
     """Return the active input limit, history budget, and retained-history budget."""
     await _resolve_model_metadata()
-    context_window = _RESOLVED_CONTEXT_WINDOW or TOTAL_CONTEXT_WINDOW
+    context_window = _effective_context_window()
     history_budget = max(
         0,
         context_window

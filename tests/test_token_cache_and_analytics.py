@@ -56,6 +56,34 @@ async def test_context_budget_uses_resolved_model_limit_without_minimum_floor(
 
 
 @pytest.mark.asyncio
+async def test_context_budget_never_exceeds_configured_total_limit(monkeypatch):
+    monkeypatch.setattr(token_counter, "_resolve_model_metadata", AsyncMock())
+    monkeypatch.setattr(token_counter, "_RESOLVED_CONTEXT_WINDOW", 16384)
+    monkeypatch.setattr(token_counter, "TOTAL_CONTEXT_WINDOW", 8192)
+
+    context_window, _, _ = await token_counter.get_context_budget(
+        prompt_overhead_tokens=500
+    )
+
+    assert context_window == 8192
+
+
+@pytest.mark.asyncio
+async def test_context_budget_uses_configured_limit_when_metadata_is_missing(
+    monkeypatch,
+):
+    monkeypatch.setattr(token_counter, "_resolve_model_metadata", AsyncMock())
+    monkeypatch.setattr(token_counter, "_RESOLVED_CONTEXT_WINDOW", None)
+    monkeypatch.setattr(token_counter, "TOTAL_CONTEXT_WINDOW", 8192)
+
+    context_window, _, _ = await token_counter.get_context_budget(
+        prompt_overhead_tokens=500
+    )
+
+    assert context_window == 8192
+
+
+@pytest.mark.asyncio
 async def test_context_budget_includes_observed_estimation_margin(monkeypatch):
     monkeypatch.setattr(token_counter, "_resolve_model_metadata", AsyncMock())
     monkeypatch.setattr(token_counter, "_RESOLVED_CONTEXT_WINDOW", 8192)

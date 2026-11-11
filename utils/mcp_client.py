@@ -17,7 +17,6 @@ from db.repositories.token_usage import log_token_usage
 from services.llm.context import get_conversation_context, save_message
 from services.llm.token_counter import (
     MAX_COMPLETION_TOKENS,
-    TOOL_RESULT_TOKENS,
     count_token,
     get_context_budget,
     get_prompt_estimate_safety_margin,
@@ -456,26 +455,8 @@ async def _trim_history_for_request(
     request_budget = (
         context_window - completion_reserve - get_prompt_estimate_safety_margin()
     )
-    tool_tokens = (
-        await count_token(json.dumps(tools, ensure_ascii=False)) if tools else 0
-    )
-
     while True:
-        serialized_messages = []
-        for message in messages:
-            if isinstance(message, dict):
-                payload = message
-            elif hasattr(message, "model_dump"):
-                payload = message.model_dump(exclude_none=True)
-            else:
-                payload = {"content": getattr(message, "content", "")}
-            serialized_messages.append(
-                json.dumps(payload, ensure_ascii=False, default=str)
-            )
-
-        request_tokens = tool_tokens
-        for serialized in serialized_messages:
-            request_tokens += await count_token(serialized)
+        request_tokens = await _estimate_serialized_request_tokens(messages, tools)
         if request_tokens <= request_budget:
             return request_tokens
 
@@ -485,6 +466,8 @@ async def _trim_history_for_request(
             if message is current_user_message
         )
         if user_index <= 1:
+            if await _shrink_tool_results_to_budget(messages, tools, request_budget):
+                continue
             logger.warning(
                 "Request exceeds the model input budget after conversation history was removed "
                 "(estimated_tokens=%s, request_budget=%s, context_window=%s)",
@@ -497,6 +480,125 @@ async def _trim_history_for_request(
             )
 
         messages.pop(1)
+
+
+def _message_payload(message):
+    if isinstance(message, dict):
+        return message
+    if hasattr(message, "model_dump"):
+        return message.model_dump(exclude_none=True)
+    return {"content": getattr(message, "content", "")}
+
+
+async def _estimate_serialized_request_tokens(
+    messages: list,
+    tools: list[dict],
+    *,
+    exclude_tool_results: bool = False,
+) -> int:
+    """Estimate token use for the serialized messages and tool schemas."""
+    total = await count_token(json.dumps(tools, ensure_ascii=False)) if tools else 0
+    for message in messages:
+        payload = _message_payload(message)
+        if exclude_tool_results and payload.get("role") == "tool":
+            continue
+        serialized = json.dumps(payload, ensure_ascii=False, default=str)
+        total += await count_token(serialized)
+    return total
+
+
+async def _truncate_tool_message_to_budget(message: dict, token_budget: int) -> bool:
+    """Truncate one tool result without emitting malformed JSON text."""
+    content = str(message.get("content", ""))
+    if not content:
+        return False
+
+    try:
+        json.loads(content)
+        is_json = True
+    except json.JSONDecodeError:
+        is_json = False
+
+    def candidate_for(prefix_length: int) -> str:
+        if prefix_length >= len(content):
+            return content
+        preview = content[:prefix_length]
+        if is_json:
+            return json.dumps(
+                {
+                    "truncated": True,
+                    "preview": preview,
+                    "message": "Tool result exceeded the available context budget.",
+                },
+                ensure_ascii=False,
+            )
+        return preview + "\n[Tool result truncated to fit the context budget.]"
+
+    async def fits(prefix_length: int) -> bool:
+        payload = dict(message)
+        payload["content"] = candidate_for(prefix_length)
+        serialized = json.dumps(payload, ensure_ascii=False, default=str)
+        return await count_token(serialized) <= token_budget
+
+    if await fits(len(content)):
+        return False
+
+    low, high = 0, len(content)
+    best = ""
+    while low <= high:
+        midpoint = (low + high) // 2
+        if await fits(midpoint):
+            best = candidate_for(midpoint)
+            low = midpoint + 1
+        else:
+            high = midpoint - 1
+
+    if best == content:
+        return False
+    message["content"] = best
+    return True
+
+
+async def _shrink_tool_results_to_budget(
+    messages: list,
+    tools: list[dict],
+    request_budget: int,
+) -> bool:
+    """Fit tool results into remaining request space after history is removed."""
+    tool_messages = [
+        message
+        for message in messages
+        if _message_payload(message).get("role") == "tool"
+    ]
+    if not tool_messages:
+        return False
+
+    base_tokens = await _estimate_serialized_request_tokens(
+        messages, tools, exclude_tool_results=True
+    )
+    remaining_tokens = max(0, request_budget - base_tokens)
+    changed = False
+
+    for index, message in enumerate(tool_messages):
+        results_remaining = len(tool_messages) - index
+        allowance = remaining_tokens // results_remaining
+        original_tokens = await count_token(
+            json.dumps(message, ensure_ascii=False, default=str)
+        )
+        if await _truncate_tool_message_to_budget(message, allowance):
+            changed = True
+        serialized = json.dumps(message, ensure_ascii=False, default=str)
+        used_tokens = await count_token(serialized)
+        remaining_tokens = max(0, remaining_tokens - used_tokens)
+        if used_tokens < original_tokens:
+            logger.warning(
+                "Tool result reduced to fit the model context (tool=%s, estimated_tokens=%s, retained_tokens=%s)",
+                message.get("name", "unknown"),
+                original_tokens,
+                used_tokens,
+            )
+
+    return changed
 
 
 async def _execute_tool_calls(
@@ -678,8 +780,6 @@ async def process_with_mcp_tools(
         and isinstance(tool.get("function"), dict)
         and isinstance(tool["function"].get("name"), str)
     }
-    tool_result_tokens_remaining = TOOL_RESULT_TOKENS
-
     for iteration in range(max_iterations):
         kwargs = {
             "model": LLM_MODEL_NAME,
@@ -807,35 +907,9 @@ async def process_with_mcp_tools(
                     bot, calls, parallel_safe_tools, ctx_obj
                 )
 
-                bounded_results = []
-                for result in results:
-                    result = str(result)
-                    result_tokens = await count_token(result)
-                    if result_tokens > tool_result_tokens_remaining:
-                        suffix = "\n[Tool result truncated to fit the context budget.]"
-                        low, high = 0, len(result)
-                        while low < high:
-                            midpoint = (low + high + 1) // 2
-                            candidate = result[:midpoint] + suffix
-                            if (
-                                await count_token(candidate)
-                                <= tool_result_tokens_remaining
-                            ):
-                                low = midpoint
-                            else:
-                                high = midpoint - 1
-                        result = result[:low] + suffix
-                        result_tokens = await count_token(result)
-                        if result_tokens > tool_result_tokens_remaining:
-                            result = ""
-                            result_tokens = 0
-                    tool_result_tokens_remaining = max(
-                        0, tool_result_tokens_remaining - result_tokens
-                    )
-                    bounded_results.append(result)
-
-                _append_tool_results(messages, calls, bounded_results)
-                for call, result in zip(calls, bounded_results, strict=True):
+                results = [str(result) for result in results]
+                _append_tool_results(messages, calls, results)
+                for call, result in zip(calls, results, strict=True):
                     tool_name = call["tool_name"]
                     try:
                         parsed = json.loads(result)
