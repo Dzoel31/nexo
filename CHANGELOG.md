@@ -2,6 +2,28 @@
 
 <!-- version list -->
 
+## v1.19.0 (2026-11-11)
+
+### Bug Fixes
+
+- **llm**: Report compaction status accurately
+  ([`f51ea5a`](https://github.com/ksm-aiot-upnvj/nexo/commit/f51ea5a6e8749d1c51877c9ea0daefbfe41aa319))
+
+### Features
+
+- Harden LLM context and tool execution
+  ([`b8a6538`](https://github.com/ksm-aiot-upnvj/nexo/commit/b8a65388e9948b975aacbae8ad267064991e2212))
+
+- Improve inference reliability
+  ([`dda7fcb`](https://github.com/ksm-aiot-upnvj/nexo/commit/dda7fcbfdf1d40338f62f96d2c6cc68ac38e5158))
+
+- Set Nexo persona
+  ([`8283c72`](https://github.com/ksm-aiot-upnvj/nexo/commit/8283c72e2ef9b81a4d20c0264299f9582bf3106a))
+
+- **llm**: Enforce context-aware input limits
+  ([`5feb11e`](https://github.com/ksm-aiot-upnvj/nexo/commit/5feb11ef0572760eadcd1de7b9e73a1959c7e8d9))
+
+
 ## v1.18.1 (2026-10-28)
 
 ### Bug Fixes
