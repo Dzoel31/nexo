@@ -48,5 +48,21 @@
     "title": "Smart Hydroponic Onboard Diperbarui!",
     "emoji": "🌱",
     "deploy_path": null
+  },
+  "ksm-aiot-upnvj/orion-backend": {
+    "team_name": "Core Team KSM AIoT",
+    "discord_channel_id": 1569735520685396098,
+    "discord_role_id": 1492049177876893836,
+    "title": "Backend ORION Diperbarui!",
+    "emoji": "🗃",
+    "deploy_path": null
+  },
+  "ksm-aiot-upnvj/orion-frontend": {
+    "team_name": "Core Team KSM AIoT",
+    "discord_channel_id": 1569735520685396098,
+    "discord_role_id": 1492049177876893836,
+    "title": "Frontend ORION Diperbarui!",
+    "emoji": "🌐",
+    "deploy_path": null
   }
 }
