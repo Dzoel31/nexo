@@ -4,6 +4,7 @@ import inspect
 import logging
 from uuid import UUID
 
+from config.settings import settings
 from db.models import MessageRole
 from db.repositories.conversation import (
     _compact_conversation,
@@ -180,7 +181,7 @@ async def check_and_trigger_rolling_summary(
         end_callback_required = True
         try:
             response = await ai_client.chat.completions.create(
-                model="local-model",
+                model=settings.LLM_MODEL_NAME,
                 messages=summarize_prompt,
                 max_completion_tokens=400,
                 temperature=0.3,
